@@ -1,0 +1,62 @@
+name: Test Jupyter Notebooks
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'samples/**/*.ipynb'
+      - 'packages/**/docs/examples/**/*.ipynb'
+      - 'samples/.github/workflows/test-notebooks.yaml'
+      - 'samples/.github/scripts/test_notebooks.py'
+
+jobs:
+  test-notebooks:
+    name: Test Notebooks
+    runs-on: ubuntu-latest
+    env:
+      EVO_CLIENT_ID: ${{ secrets.EVO_SERVICE_APP_CLIENT_ID }}
+      EVO_CLIENT_SECRET: ${{ secrets.EVO_SERVICE_APP_CLIENT_SECRET }}
+      EVO_ORG_ID: ${{ secrets.EVO_ORG_ID }}
+      EVO_HUB_URL: ${{ secrets.EVO_HUB_URL }}
+      EVO_WORKSPACE_ID: ${{ secrets.EVO_WORKSPACE_ID }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/$(cat UV_VERSION)/install.sh | sh
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      
+      - name: Install dependencies
+        run: |
+          cd samples
+          uv sync
+          # Install additional dependencies for notebook testing
+          uv pip install nbformat nbclient ipykernel jupyter python-dotenv
+      
+      - name: Test notebooks
+        run: |
+          cd samples
+          uv run python .github/scripts/test_notebooks.py
+        continue-on-error: false
+      
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: notebook-test-results
+          path: |
+            samples/test-results/*.log
+            samples/test-results/*.json
+          retention-days: 7

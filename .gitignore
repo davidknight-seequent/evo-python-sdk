@@ -21,6 +21,9 @@ venv*/
 .env
 .tox/
 
+# Test environment files with secrets
+samples/.github/scripts/.env
+
 # Jupyter Notebook checkpoints
 .ipynb_checkpoints/
 

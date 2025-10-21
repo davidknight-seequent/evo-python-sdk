@@ -5,6 +5,7 @@ description = "Code samples for the Seequent Evo Python SDK"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "evo-data-converters-common>=0.2.1",
     "evo-schemas>=2025.9.12",
     "evo-sdk",
     "geosoft>=2025.1.1 ; sys_platform == 'windows'",
@@ -14,6 +15,15 @@ dependencies = [
     "pyarrow>=19.0.1",
     "requests>=2.32.3",
     "uuid>=1.30",
+]
+
+[project.optional-dependencies]
+testing = [
+    "nbformat>=5.10.0",
+    "nbclient>=0.10.0",
+    "ipykernel>=6.29.0",
+    "jupyter>=1.1.0",
+    "python-dotenv>=1.0.0",
 ]
 
 [project.urls]
