@@ -32,9 +32,6 @@ export EVO_CLIENT_ID="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 export EVO_REDIRECT_URL="http://localhost:8765/callback"
 export EVO_WORKSPACE_ID="workspace-guid"
 
-# (Optional) If you already have a token
-# export EVO_ACCESS_TOKEN="eyJhbGciOi..."
-
 # 3. Launch Jupyter (choose your notebook UI)
 uv run jupyter lab  # or: uv run jupyter notebook
 
