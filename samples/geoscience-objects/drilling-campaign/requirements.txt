@@ -1,0 +1,3 @@
+evo-sdk
+evo-schemas
+prettytable
