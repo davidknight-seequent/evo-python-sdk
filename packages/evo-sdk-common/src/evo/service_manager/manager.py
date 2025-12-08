@@ -18,7 +18,7 @@ from uuid import UUID
 from evo import logging
 from evo.common import APIConnector, BaseAPIClient, Environment
 from evo.common.exceptions import SelectionError
-from evo.common.interfaces import IAuthorizer, ITransport
+from evo.common.interfaces import IAuthorizer, ICache, IContext, ITransport
 from evo.discovery import DiscoveryAPIClient, Hub, Organization
 from evo.workspaces import Workspace, WorkspaceAPIClient
 
@@ -247,18 +247,22 @@ class _State:
         )
 
 
-class ServiceManager:
+class ServiceManager(IContext):
     """A simple service manager for managing the current selection of organizations, hubs, and workspaces."""
 
-    def __init__(self, transport: ITransport, authorizer: IAuthorizer, discovery_url: str) -> None:
+    def __init__(
+        self, transport: ITransport, authorizer: IAuthorizer, discovery_url: str, cache: ICache | None = None
+    ) -> None:
         """
         :param transport: The transport to use for API requests.
         :param authorizer: The authorizer to use for API requests.
         :param discovery_url: The URL of the discovery service.
+        :param cache: An optional cache to use for caching data.
         """
         self._transport = transport
         self._authorizer = authorizer
         self._discovery_url = discovery_url
+        self._cache = cache
 
         # The state mutex is only required for longer-running operations (e.g., refreshing organizations) to prevent
         # concurrent updates to the state. Read-only operations (e.g., listing organizations) are considered safe
@@ -414,6 +418,23 @@ class ServiceManager:
         if not isinstance(ws := self.get_current_workspace(), Workspace):
             raise SelectionError("No workspace is currently selected.")
         return Environment(hub_url=hub.url, org_id=org.id, workspace_id=ws.id)
+
+    def get_org_id(self) -> UUID:
+        """Gets the currently selected organization ID.
+
+        :return: The organization ID.
+        :raises SelectionError: If no organization is currently selected.
+        """
+        if not isinstance(org := self.get_current_organization(), Organization):
+            raise SelectionError("No organization is currently selected.")
+        return org.id
+
+    def get_cache(self) -> ICache | None:
+        """Get the cache associated with this service manager.
+
+        :return: The cache, if any.
+        """
+        return self._cache
 
     def create_client(self, client_class: type[T_client], *args: Any, **kwargs: Any) -> T_client:
         """Create a client for the currently selected workspace.

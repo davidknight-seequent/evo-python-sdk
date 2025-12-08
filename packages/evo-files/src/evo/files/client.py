@@ -15,7 +15,15 @@ from pathlib import PurePosixPath
 from uuid import UUID
 
 from evo import logging
-from evo.common import APIConnector, BaseAPIClient, Environment, HealthCheckType, Page, ServiceHealth, ServiceUser
+from evo.common import (
+    APIConnector,
+    BaseAPIClient,
+    Environment,
+    HealthCheckType,
+    Page,
+    ServiceHealth,
+    ServiceUser,
+)
 from evo.common.utils import get_service_health
 
 from .data import FileMetadata, FileVersion

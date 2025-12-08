@@ -16,7 +16,7 @@ import uuid
 from uuid import UUID
 
 from evo import logging
-from evo.common import APIConnector, BaseAPIClient, Environment, HealthCheckType, ICache, ServiceHealth
+from evo.common import APIConnector, BaseAPIClient, Environment, HealthCheckType, ICache, IContext, ServiceHealth
 from evo.common.data import ServiceUser
 from evo.common.utils import get_service_health
 
@@ -108,6 +108,21 @@ class BlockModelAPIClient(BaseAPIClient):
         self._column_operations_api = ColumnOperationsApi(connector)
         self._metadata_api = MetadataApi(connector)
         self._cache = cache
+
+    @classmethod
+    def from_context(cls, context: IContext) -> BlockModelAPIClient:
+        """Create a BlockModelAPIClient from the given context.
+
+        The context must have a hub_url, org_id, and workspace_id set.
+
+        :param context: The context to create the client from.
+        :return: A BlockModelAPIClient instance.
+        """
+        return cls(
+            environment=context.get_environment(),
+            connector=context.get_connector(),
+            cache=context.get_cache(),
+        )
 
     async def get_service_health(self, check_type: HealthCheckType = HealthCheckType.FULL) -> ServiceHealth:
         """Get the health of the service.
