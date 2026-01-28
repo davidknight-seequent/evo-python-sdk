@@ -12,12 +12,19 @@
 from .attributes import Attribute, Attributes
 from .base import BaseObject
 from .regular_grid import (
-    Cells,
     Regular3DGrid,
     Regular3DGridData,
-    Vertices,
+)
+from .regular_masked_grid import (
+    MaskedCells,
+    RegularMasked3DGrid,
+    RegularMasked3DGridData,
 )
 from .spatial import BaseSpatialObject
+from .tensor_grid import (
+    Tensor3DGrid,
+    Tensor3DGridData,
+)
 from .types import BoundingBox, CoordinateReferenceSystem, EpsgCode, Point3, Rotation, Size3d, Size3i
 
 __all__ = [
@@ -26,14 +33,17 @@ __all__ = [
     "BaseObject",
     "BaseSpatialObject",
     "BoundingBox",
-    "Cells",
     "CoordinateReferenceSystem",
     "EpsgCode",
+    "MaskedCells",
     "Point3",
     "Regular3DGrid",
     "Regular3DGridData",
+    "RegularMasked3DGrid",
+    "RegularMasked3DGridData",
     "Rotation",
     "Size3d",
     "Size3i",
-    "Vertices",
+    "Tensor3DGrid",
+    "Tensor3DGridData",
 ]
