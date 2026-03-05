@@ -26,7 +26,12 @@ from .html import (
     build_table_row_vtop,
     build_title,
 )
-from .urls import get_blocksync_block_model_url_from_environment, get_portal_url_for_object, get_viewer_url_for_object
+from .urls import (
+    get_blocksync_block_model_url_from_environment,
+    get_portal_url_for_object,
+    get_portal_url_from_reference,
+    get_viewer_url_for_object,
+)
 
 __all__ = [
     "format_attributes_collection",
@@ -36,6 +41,8 @@ __all__ = [
     "format_block_model_version",
     "format_report",
     "format_report_result",
+    "format_task_result_list",
+    "format_task_result_with_target",
     "format_variogram",
 ]
 
@@ -560,4 +567,144 @@ def format_block_model(obj: Any) -> str:
         html += f'<div style="margin-top: 8px;"><strong>Attributes ({len(attrs)}):</strong></div>{attrs_table}'
 
     html += "</div>"
+    return html
+
+
+# =============================================================================
+# Compute Task Result Formatters
+# =============================================================================
+
+
+def _get_task_result_portal_url(result: Any) -> str | None:
+    """Extract Portal URL from a task result's target reference.
+
+    :param result: A result object with ``_target.reference`` attribute.
+    :return: Portal URL string or None if not available.
+    """
+    # Check if result has target attribute (public Pydantic field)
+    target = getattr(result, "target", None) or getattr(result, "_target", None)
+    if target is None:
+        return None
+
+    # Check if target has reference attribute
+    ref = getattr(target, "reference", None)
+    if not ref or not isinstance(ref, str):
+        return None
+
+    # Try to generate portal URL from reference
+    try:
+        return get_portal_url_from_reference(ref)
+    except ValueError:
+        # Invalid reference URL format
+        return None
+
+
+def _get_schema_display(result: Any) -> str:
+    """Get a displayable schema string from a task result.
+
+    Uses ``result.schema`` which returns an ``ObjectSchema`` and converts it
+    to a string via ``str()``.
+
+    :param result: A task result object.
+    :return: A string representation of the schema.
+    """
+    schema_obj = getattr(result, "schema", None)
+    if schema_obj is not None:
+        return str(schema_obj)
+    return "Unknown"
+
+
+def _format_single_task_result_inner(result: Any, index: int | None = None) -> str:
+    """Render the inner HTML for a single task result card.
+
+    Returns the title, message, and detail table *without* the outer
+    ``<div class="evo">`` wrapper or the stylesheet so it can be embedded
+    inside both :func:`format_task_result_with_target` and
+    :func:`format_task_result_list`.
+
+    :param result: A result object (e.g. ``KrigingResult``).
+    :param index: Optional 1-based index to prefix the title with (e.g. ``#1``).
+    :return: HTML fragment.
+    """
+    portal_url = _get_task_result_portal_url(result)
+    links = [("Portal", portal_url)] if portal_url else None
+
+    result_type = getattr(result, "TASK_DISPLAY_NAME", "Task")
+
+    if index is not None:
+        title = f"#{index} ✓ {result_type} Result"
+    else:
+        title = f"✓ {result_type} Result"
+
+    target_name = getattr(result, "target_name", None)
+    if target_name is not None:
+        schema_display = _get_schema_display(result)
+        attribute_name = getattr(result, "attribute_name", "")
+        rows = [
+            ("Target:", target_name),
+            ("Schema:", schema_display),
+            ("Attribute:", f'<span class="attr-highlight">{attribute_name}</span>'),
+        ]
+    else:
+        rows = []
+
+    table_rows = [build_table_row(label, value) for label, value in rows]
+
+    html = build_title(title, links)
+    message = getattr(result, "message", None)
+    if message:
+        html += f'<div class="message">{message}</div>'
+    if table_rows:
+        html += f"<table>{''.join(table_rows)}</table>"
+
+    return html
+
+
+def format_task_result_with_target(result: Any) -> str:
+    """Format a KrigingResult or any other task result with a target as HTML.
+
+    Displays the task completion status, target information, and Portal links.
+
+    :param result: A KrigingResult object with message, target_name, schema,
+        attribute_name, and _target attributes.
+    :return: HTML string for the task result.
+    """
+    html = STYLESHEET
+    html += '<div class="evo">'
+    html += _format_single_task_result_inner(result)
+    html += "</div>"
+    return html
+
+
+def format_task_result_list(results: Any) -> str:
+    """Format a TaskResultList as styled HTML.
+
+    Renders each result as an individually-formatted card (reusing the
+    same layout as :func:`format_task_result_with_target`) wrapped in a
+    single container with a summary title.
+
+    :param results: A ``TaskResultList`` object with iterable result items.
+    :return: HTML string for the results collection.
+    """
+    result_list = results._results
+
+    if not result_list:
+        return "<div>No results</div>"
+
+    result_type = getattr(result_list[0], "TASK_DISPLAY_NAME", "Task")
+    title = f"✓ {len(result_list)} {result_type} Result(s)"
+
+    html = STYLESHEET
+    html += '<div class="evo">'
+    html += build_title(title)
+
+    for i, result in enumerate(result_list):
+        html += (
+            '<div style="margin-top: 0.5em; padding-top: 0.5em; border-top: 1px solid var(--jp-border-color1, #ddd);">'
+        )
+        html += _format_single_task_result_inner(result, index=i + 1)
+        html += "</div>"
+
+    html += "</div>"
+
     return html
