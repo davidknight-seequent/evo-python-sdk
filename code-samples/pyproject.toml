@@ -1,20 +1,21 @@
 [project]
 name = "evo-code-samples"
-version = "0.0.1"
+version = "0.0.2"
 description = "Code samples for the Seequent Evo Python SDK"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "evo-schemas>=2025.12.15",
-    "evo-sdk>=0.1.17",
+    "evo-schemas>=2026.1.8",
+    "evo-sdk>=0.1.18",
     "geosoft>=2025.1.1 ; sys_platform == 'win32'",
+    "jupyterlab>=4.0.0",
     "PyJWT",
     "matplotlib>=3.10.8",
+    "numpy>=2.0.0",
     "pandas[excel]>=2.2.3",
     "prettytable>=3.16.0",
     "pyarrow>=19.0.1",
     "requests>=2.32.3",
-    "uuid>=1.30",
 ]
 
 [dependency-groups]

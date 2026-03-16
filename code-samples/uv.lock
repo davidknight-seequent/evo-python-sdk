@@ -797,14 +797,16 @@ dependencies = [
     { name = "evo-schemas" },
     { name = "evo-sdk" },
     { name = "geosoft", marker = "sys_platform == 'win32'" },
+    { name = "jupyterlab" },
     { name = "matplotlib" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, extra = ["excel"], marker = "python_full_version < '3.11'" },
     { name = "pandas", version = "3.0.0", source = { registry = "https://pypi.org/simple" }, extra = ["excel"], marker = "python_full_version >= '3.11'" },
     { name = "prettytable" },
     { name = "pyarrow" },
     { name = "pyjwt" },
     { name = "requests" },
-    { name = "uuid" },
 ]
 
 [package.dev-dependencies]
@@ -816,16 +818,17 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "evo-schemas", specifier = ">=2025.12.15" },
-    { name = "evo-sdk", specifier = ">=0.1.17" },
+    { name = "evo-schemas", specifier = ">=2026.1.8" },
+    { name = "evo-sdk", specifier = ">=0.1.18" },
     { name = "geosoft", marker = "sys_platform == 'win32'", specifier = ">=2025.1.1" },
+    { name = "jupyterlab", specifier = ">=4.0.0" },
     { name = "matplotlib", specifier = ">=3.10.8" },
+    { name = "numpy", specifier = ">=2.0.0" },
     { name = "pandas", extras = ["excel"], specifier = ">=2.2.3" },
     { name = "prettytable", specifier = ">=3.16.0" },
     { name = "pyarrow", specifier = ">=19.0.1" },
     { name = "pyjwt" },
     { name = "requests", specifier = ">=2.32.3" },
-    { name = "uuid", specifier = ">=1.30" },
 ]
 
 [package.metadata.requires-dev]
@@ -1218,12 +1221,12 @@ name = "geosoft"
 version = "2025.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "jdcal" },
+    { name = "jdcal", marker = "python_full_version < '3.11' or sys_platform == 'win32'" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "numpy", version = "2.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "numpy", version = "2.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' and sys_platform == 'win32'" },
     { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "pandas", version = "3.0.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-    { name = "requests" },
+    { name = "pandas", version = "3.0.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' and sys_platform == 'win32'" },
+    { name = "requests", marker = "python_full_version < '3.11' or sys_platform == 'win32'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/6a/68/b99eca4f320541239f7ef9412c2bf510c5d3977fbce11eec206a271cef84/geosoft-2025.2.0-cp310-none-win_amd64.whl", hash = "sha256:509448451b668fddce604eac683d73b5cd6beb02bbba18dfedc0926698603ec1", size = 6373109, upload-time = "2025-12-15T18:34:30.634Z" },
@@ -3922,12 +3925,6 @@ sdist = { url = "https://files.pythonhosted.org/packages/c7/24/5f1b3bdffd70275f6
 wheels = [
     { url = "https://files.pythonhosted.org/packages/39/08/aaaad47bc4e9dc8c725e68f9d04865dbcb2052843ff09c97b08904852d84/urllib3-2.6.3-py3-none-any.whl", hash = "sha256:bf272323e553dfb2e87d9bfd225ca7b0f467b919d7bbd355436d3fd37cb0acd4", size = 131584, upload-time = "2026-01-07T16:24:42.685Z" },
 ]
-
-[[package]]
-name = "uuid"
-version = "1.30"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/ce/63/f42f5aa951ebf2c8dac81f77a8edcc1c218640a2a35a03b9ff2d4aa64c3d/uuid-1.30.tar.gz", hash = "sha256:1f87cc004ac5120466f36c5beae48b4c48cc411968eed0eaecd3da82aa96193f", size = 5811, upload-time = "2007-05-26T11:13:24Z" }
 
 [[package]]
 name = "virtualenv"
