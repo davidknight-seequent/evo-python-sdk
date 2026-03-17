@@ -157,14 +157,14 @@ Before diving into the geoscience code samples, we recommend that you first test
 
 <img src="../docs/img/jupyter-start-here.png" alt="Jupyter start here" width="350" />
 
-a. Click to open **native-spa-web-auth.ipynb**.
-b. Enter your **client ID** and **callback URL** from when you registered your Evo app.
+a. Click to open **sdk-examples.ipynb**.
+b. In the **Native, SPA, or Web app auth** section, enter your **client ID** and **callback URL** from when you registered your Evo app.
 
 <img src="../docs/img/notebook-auth-setup.png" alt="Auth setup" width="500" />
 
-c. Run the first code cell by pressing Shift+Enter or by pressing the Play button in the toolbar.
+c. Run the first code cell in that section by pressing Shift+Enter or by pressing the Play button in the toolbar.
 
-d. Run the next code cell. You may see red warning text - this is normal.
+d. Run the next code cell in that section. You may see red warning text - this is normal.
 
 e. If everything is set up correctly, your web browser should open a new tab and ask you to sign in with your Bentley ID. Once you have signed in and granted access to the app, return to the tab with Jupyter running.
 
@@ -182,8 +182,7 @@ Now that you know how Evo auth works, explore the other Jupyter notebooks. They 
 **📁 [auth-and-evo-discovery](auth-and-evo-discovery/)**
 
 Learn about Evo auth and the Evo Discovery service:
-- `native-spa-web-auth.ipynb` - Authentication for desktop, SPA, and web applications
-- `service-app-auth.ipynb` - Authentication for service applications  
+- `sdk-examples.ipynb` - SDK authentication examples for native, SPA, web, and service applications
 - `api-examples.ipynb` - Direct API examples for native auth, service auth, and Evo Discovery
 
 ### 🧊 Block models
