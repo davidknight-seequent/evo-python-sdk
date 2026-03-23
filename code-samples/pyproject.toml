@@ -13,7 +13,7 @@ dependencies = [
     "PyJWT",
     "matplotlib>=3.10.8",
     "numpy>=2.0.0",
-    "pandas[excel]>=2.2.3",
+    "pandas>=2.2.3",
     "prettytable>=3.16.0",
     "pyarrow>=19.0.1",
     "requests>=2.32.3",
