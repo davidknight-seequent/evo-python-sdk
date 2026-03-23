@@ -81,7 +81,7 @@ Pointset `1.3.0` schemas may be available in the installed schema package, but t
 
 ## Quick Start
 
-1. Open `publish-pointset.ipynb` in Jupyter.
+1. Open `sdk-examples.ipynb` in Jupyter.
 2. Update `client_id` and `redirect_url` with your Evo app credentials.
 3. Run the notebook cells in order.
 4. Use the generated Viewer or Portal link to inspect the created object in Evo.
