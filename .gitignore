@@ -24,6 +24,9 @@ venv*/
 # Jupyter Notebook checkpoints
 .ipynb_checkpoints/
 
+# Generated download artifacts from code-samples notebooks
+code-samples/**/downloads/
+
 # Sample data directories (ignore all data except input folders)
 samples/*/publish*/data/*
 samples/*/download*/data/*
