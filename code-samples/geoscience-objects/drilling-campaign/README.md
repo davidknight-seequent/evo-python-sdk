@@ -82,6 +82,14 @@ If using VS Code, you can simply open the notebooks directly; the Python / ipyke
 
 The **create** notebook includes sample CSV data in its `sample-data/` directory with example collar, survey, and attribute files. The **create planned-only** notebook includes a `planned.csv` sample used to publish only the planned section of a new object. The **update** notebook includes an `interim.csv` sample used to build a new interim section for an existing object. The **incremental update** notebook uses the `interim-progressive/` snapshot set and stores the next snapshot index in `notebook-data/.env`. The **download** notebook works with existing drilling campaign objects in your Evo workspace and does not require sample data.
 
+A reusable synthetic dataset is also available in `synthetic-10-hole-dataset/`. It includes:
+
+- `planned.csv` with 10 collar and planned rows.
+- `interim.csv` with a full downhole survey dataset derived from the same holes.
+- `interim-progressive/interim_00.csv` through `interim_19.csv`, which form 20 cumulative interim snapshots for progressive publishing examples.
+
+From either drilling campaign notebook folder, you can point `input_path` or `progress_input_path` at `../synthetic-10-hole-dataset`.
+
 ## Additional Resources
 
 - [Seequent Developer Portal](https://developer.seequent.com)
