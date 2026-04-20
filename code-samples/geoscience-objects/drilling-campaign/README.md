@@ -1,6 +1,6 @@
 # Drilling Campaign Examples
 
-This directory contains four Jupyter notebooks demonstrating how to work with **Evo Drilling Campaign** geoscience objects using the high-level Python SDK. These examples show how to create drilling campaign objects from CSV data, how to publish only a planned section, how to download existing drilling campaign objects, and how to publish a new interim section onto an existing drilling campaign.
+This directory contains five Jupyter notebooks demonstrating how to work with **Evo Drilling Campaign** geoscience objects using the high-level Python SDK. These examples show how to create drilling campaign objects from CSV data, how to publish only a planned section, how to download existing drilling campaign objects, how to publish a new interim section onto an existing drilling campaign, and how to publish progressive interim snapshots over multiple runs.
 
 ## Notebooks
 
@@ -10,6 +10,7 @@ This directory contains four Jupyter notebooks demonstrating how to work with **
 | `create-a-drilling-campaign-planned-only/sdk-examples.ipynb` | Create a drilling campaign with only the planned section | Publish a new drilling campaign object and stop after the initial planned-section publish |
 | `download-a-drilling-campaign/sdk-examples.ipynb` | Download drilling campaign objects to CSV format | List, retrieve, and export drilling campaign data from Evo |
 | `update-a-drilling-campaign/sdk-examples.ipynb` | Update an existing drilling campaign with interim data | Select an existing drilling campaign, copy its planned section, add interim data, and publish a new version |
+| `update-a-drilling-campaign/progressive-sdk-examples.ipynb` | Incrementally publish interim drilling campaign data | Publish one interim snapshot per run and track the next snapshot index in `notebook-data/.env` |
 
 ## What You Can Do
 
@@ -41,6 +42,13 @@ This directory contains four Jupyter notebooks demonstrating how to work with **
 4. Copy the existing planned section from the downloaded object.
 5. Build a new interim section from CSV data and publish a new object version.
 
+### Incremental Interim Publishing
+1. Authenticate with Evo.
+2. Select an existing drilling campaign object.
+3. Read the next progressive interim snapshot from `sample-data/interim-progressive`.
+4. Publish that single snapshot as the current interim state.
+5. Advance the counter stored in `notebook-data/.env` so the next run publishes the next snapshot.
+
 ## Prerequisites
 
 - A Seequent account with Evo entitlements.
@@ -65,13 +73,14 @@ open geoscience-objects/drilling-campaign/create-a-drilling-campaign/sdk-example
 open geoscience-objects/drilling-campaign/create-a-drilling-campaign-planned-only/sdk-examples.ipynb
 open geoscience-objects/drilling-campaign/download-a-drilling-campaign/sdk-examples.ipynb
 open geoscience-objects/drilling-campaign/update-a-drilling-campaign/sdk-examples.ipynb
+open geoscience-objects/drilling-campaign/update-a-drilling-campaign/progressive-sdk-examples.ipynb
 ```
 
 If using VS Code, you can simply open the notebooks directly; the Python / ipykernel environment should point at the synced virtual environment.
 
 ## Sample Data
 
-The **create** notebook includes sample CSV data in its `sample-data/` directory with example collar, survey, and attribute files. The **create planned-only** notebook includes a `planned.csv` sample used to publish only the planned section of a new object. The **update** notebook includes an `interim.csv` sample used to build a new interim section for an existing object. The **download** notebook works with existing drilling campaign objects in your Evo workspace and does not require sample data.
+The **create** notebook includes sample CSV data in its `sample-data/` directory with example collar, survey, and attribute files. The **create planned-only** notebook includes a `planned.csv` sample used to publish only the planned section of a new object. The **update** notebook includes an `interim.csv` sample used to build a new interim section for an existing object. The **incremental update** notebook uses the `interim-progressive/` snapshot set and stores the next snapshot index in `notebook-data/.env`. The **download** notebook works with existing drilling campaign objects in your Evo workspace and does not require sample data.
 
 ## Additional Resources
 
