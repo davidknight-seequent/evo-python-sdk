@@ -4,7 +4,7 @@ Welcome to the Evo Python SDK code samples! This directory contains comprehensiv
 
 ## 📋 Prerequisites
 
-- **Evo app**: You need a [registered app in Bentley](https://developer.bentley.com/register/?product=seequent-evo) to obtain a client ID
+- **Evo app**: You need a [registered app](https://developer.seequent.com/my-apps)
 - **Python**: Version 3.10 or higher
 - **Jupyter Environment**: JupyterLab, VS Code, or another Jupyter notebook editor
 
@@ -14,31 +14,25 @@ Welcome to the Evo Python SDK code samples! This directory contains comprehensiv
 
 Register your Evo application in the [Bentley Developer Portal](https://developer.bentley.com/my-apps) to get your client credentials. If a member of your team has already registered an app, contact them and ask for the client credentials. For in-depth instructions, follow this [guide](https://developer.seequent.com/docs/guides/getting-started/apps-and-tokens) on the Seequent Developer Portal.
 
-a. In a new browser tab or window, visit [https://developer.bentley.com/](https://developer.bentley.com/) and sign in.
+a. In a new browser tab or window, visit [https://developer.seequent.com/](https://developer.seequent.com/) and sign in.
 
-b. Click your profile in the top-right corner and select **My Apps**. You may need to agree to Bentley developer terms before proceeding.
+<img src="../docs/img/sign-in.png" alt="Sign-in" width="330" />
 
-<img src="../docs/img/profile-menu-apps.png" alt="Select My Apps" width="250" />
+b. Click **My apps** in the toolbar. You may need to agree to Seequent developer terms before proceeding.
 
-c. Click the dropdown arrow on the **Register New** button and choose **Register new app for Seequent Evo**.
+<img src="../docs/img/my-apps-menu.png" alt="Click My apps" width="450" />
 
-<img src="../docs/img/register-new.png" alt="Register new app" width="300" />
+c. TODO
+
 
 d. Enter an application name and select the **Native** application type.
 
-<img src="../docs/img/app-name-native.png" alt="Enter app name" width="700" />
 
 e. Enter **http://localhost:3000/signin-callback** in **Redirect URIs**.
 
-<img src="../docs/img/app-callbacks.png" alt="Enter callback url" width="300" />
-
 f. Click **Register**.
 
-<img src="../docs/img/app-register.png" alt="Click register" width="250" />
-
 g. The next screen displays the unique **Client ID** of your application. Save a copy - you will need it to run the Jupyter notebooks.
-
-<img src="../docs/img/edit-app-native.png" alt="Copy client ID" width="400" />
 
 ### 2. Obtain a local copy of this repository
 
