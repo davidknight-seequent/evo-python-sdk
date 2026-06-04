@@ -256,6 +256,13 @@ class TargetWorkspaceSelectorWidget:
             style={"description_width": "100px"},
         )
 
+        self.target_name_input = widgets.Text(
+            value="",
+            placeholder="Keep original name",
+            description="New Name",
+            style={"description_width": "100px"},
+        )
+
         # Info display
         self.info_display = widgets.HTML(value="")
 
@@ -266,6 +273,7 @@ class TargetWorkspaceSelectorWidget:
                 self.operation_label,
                 self.delete_original_checkbox,
                 self.workspace_selector,
+                self.target_name_input,
                 self.info_display,
             ]
         )
@@ -273,6 +281,7 @@ class TargetWorkspaceSelectorWidget:
         # Observe selection changes
         self.workspace_selector.observe(self._on_workspace_selected, names="value")
         self.delete_original_checkbox.observe(self._on_checkbox_changed, names="value")
+        self.target_name_input.observe(self._on_name_changed, names="value")
 
     def _on_refresh_click(self, btn):
         """Handle refresh button click."""
@@ -290,22 +299,19 @@ class TargetWorkspaceSelectorWidget:
             # Get all workspaces from the service manager
             workspaces = self.manager_widget.workspaces
 
-            # Filter out the current workspace
-            other_workspaces = [ws for ws in workspaces if ws.id != self.current_workspace_id]
-
             # Update workspace selector options
-            if other_workspaces:
+            if workspaces:
                 workspace_options = [("Select target workspace...", None)]
                 workspace_options.extend(
-                    [(ws.display_name, ws.id) for ws in sorted(other_workspaces, key=lambda w: w.display_name)]
+                    [(ws.display_name, ws.id) for ws in sorted(workspaces, key=lambda w: w.display_name)]
                 )
                 self.workspace_selector.options = workspace_options
                 self.workspace_selector.value = None
-                self.loading_label.value = f"Loaded {len(other_workspaces)} workspace(s)"
+                self.loading_label.value = f"Loaded {len(workspaces)} workspace(s)"
             else:
-                self.workspace_selector.options = [("No other workspaces available", None)]
+                self.workspace_selector.options = [("No workspaces available", None)]
                 self.workspace_selector.value = None
-                self.loading_label.value = "No other workspaces found"
+                self.loading_label.value = "No workspaces found"
 
         except Exception as e:
             self.loading_label.value = f"Error: {str(e)}"
@@ -320,6 +326,10 @@ class TargetWorkspaceSelectorWidget:
 
     def _on_checkbox_changed(self, change):
         """Handle delete original checkbox change."""
+        self._update_info_display()
+
+    def _on_name_changed(self, change):
+        """Handle target object name change."""
         self._update_info_display()
 
     def _update_info_display(self):
@@ -341,6 +351,8 @@ class TargetWorkspaceSelectorWidget:
         # Get current workspace info
         current_ws = next((ws for ws in workspaces if ws.id == self.current_workspace_id), None)
         operation = "Move" if self.delete_original_checkbox.value else "Copy"
+        rename_to = self.get_target_object_name()
+        rename_text = rename_to if rename_to else "(keep original)"
 
         # Build info HTML
         info_html = f"""
@@ -349,6 +361,7 @@ class TargetWorkspaceSelectorWidget:
             <b>Action:</b> {operation} object<br/>
             <b>From:</b> {current_ws.display_name}<br/>
             <b>To:</b> {selected_ws.display_name}<br/>
+            <b>Rename To:</b> {rename_text}<br/>
             <b>Target Workspace ID:</b> {selected_ws.id}<br/>
         </div>
         """
@@ -367,3 +380,8 @@ class TargetWorkspaceSelectorWidget:
     def get_operation(self) -> str:
         """Get the selected operation type ('Copy' or 'Move')."""
         return "Move" if self.delete_original_checkbox.value else "Copy"
+
+    def get_target_object_name(self) -> Optional[str]:
+        """Get the optional target object name. Returns None when unchanged."""
+        name = self.target_name_input.value.strip()
+        return name or None
