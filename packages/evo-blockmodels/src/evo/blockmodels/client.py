@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from pathlib import Path
+from typing import Any
 from uuid import UUID
 
 from evo import logging
@@ -27,8 +28,10 @@ from ._utils import convert_dtype, extract_payload
 from .data import (
     BaseGridDefinition,
     BlockModel,
+    ColumnMetadataUpdate,
     FlexibleGridDefinition,
     FullySubBlockedGridDefinition,
+    ListingVersion,
     OctreeGridDefinition,
     RegularGridDefinition,
     SubBlockedGridDefinition,
@@ -44,11 +47,11 @@ from .endpoints.models import (
     ColumnHeaderType,
     CreateData,
     DeltaRequestData,
-    DeltaResponseData,
     GeometryColumns,
     JobErrorPayload,
     JobResponse,
     JobStatus,
+    ListingDeltaResponseData,
     Location,
     OctreeSubblocks,
     OutputOptionsParquet,
@@ -79,8 +82,24 @@ def _job_id_from_url(job_url: AnyUrl) -> UUID:
     return UUID(job_id)
 
 
-def _version_from_model(version: models.Version) -> Version:
+def _version_from_model(version: models.Version | models.VersionWithChanges) -> Version:
     return Version(
+        bm_uuid=version.bm_uuid,
+        version_id=version.version_id,
+        version_uuid=version.version_uuid,
+        created_at=version.created_at,
+        created_by=ServiceUser.from_model(version.created_by),
+        comment=version.comment,
+        bbox=version.bbox,
+        base_version_id=version.base_version_id,
+        parent_version_id=version.parent_version_id,
+        columns=version.mapping.columns,
+        geoscience_version_id=version.geoscience_version_id,
+    )
+
+
+def _version_listing_from_model(version: models.ListingVersion) -> ListingVersion:
+    return ListingVersion(
         bm_uuid=version.bm_uuid,
         version_id=version.version_id,
         version_uuid=version.version_uuid,
@@ -116,7 +135,13 @@ _GEOMETRY_COLUMNS = {
 
 
 class BlockModelAPIClient(BaseAPIClient):
-    def __init__(self, environment: Environment, connector: APIConnector, cache: ICache | None = None) -> None:
+    def __init__(
+        self,
+        environment: Environment,
+        connector: APIConnector,
+        cache: ICache | None = None,
+        preview: bool = False,
+    ) -> None:
         """
         Constructor for the Block Model Service client.
 
@@ -125,6 +150,7 @@ class BlockModelAPIClient(BaseAPIClient):
         :param environment: The environment object.
         :param connector: The connector object.
         :param cache: The cache to use for storing temporary files.
+        :param preview: Whether to use preview mode and include the ``API-Preview: opt-in`` header.
         """
         super().__init__(environment, connector)
         self._versions_api = VersionsApi(connector)
@@ -134,21 +160,28 @@ class BlockModelAPIClient(BaseAPIClient):
         self._metadata_api = MetadataApi(connector)
         self._reports_api = ReportsApi(connector)
         self._cache = cache
+        self._preview = preview
 
     @classmethod
-    def from_context(cls, context: IContext) -> BlockModelAPIClient:
+    def from_context(cls, context: IContext, preview: bool = False) -> BlockModelAPIClient:
         """Create a BlockModelAPIClient from the given context.
 
         The context must have a hub_url, org_id, and workspace_id set.
 
         :param context: The context to create the client from.
+        :param preview: Whether to use preview mode and include the ``API-Preview: opt-in`` header.
         :return: A BlockModelAPIClient instance.
         """
         return cls(
             environment=context.get_environment(),
             connector=context.get_connector(),
             cache=context.get_cache(),
+            preview=preview,
         )
+
+    def _preview_headers(self) -> dict[str, str]:
+        """Return preview opt-in headers for generated endpoint methods."""
+        return {"API-Preview": "opt-in"} if self._preview else {}
 
     async def get_service_health(self, check_type: HealthCheckType = HealthCheckType.FULL) -> ServiceHealth:
         """Get the health of the service.
@@ -233,6 +266,7 @@ class BlockModelAPIClient(BaseAPIClient):
                 workspace_id=str(self._environment.workspace_id),
                 org_id=str(self._environment.org_id),
                 bm_id=str(bm_id),
+                additional_headers=self._preview_headers(),
             )
             if response.job_status == JobStatus.COMPLETE:
                 return response
@@ -309,6 +343,7 @@ class BlockModelAPIClient(BaseAPIClient):
                 size_options=size_options,
                 comment=comment,
             ),
+            additional_headers=self._preview_headers(),
         )
         job_id = _job_id_from_url(create_result.job_url)
         job_status = await self._poll_job_url(create_result.bm_uuid, job_id)
@@ -345,6 +380,7 @@ class BlockModelAPIClient(BaseAPIClient):
             workspace_id=str(self._environment.workspace_id),
             bm_id=str(bm_id),
             job_id=str(job_uuid),
+            additional_headers=self._preview_headers(),
         )
 
         # Poll until the job completes
@@ -361,19 +397,20 @@ class BlockModelAPIClient(BaseAPIClient):
         return await self.upload_block_model(bm_id, job_id, upload_url, cache_location)
 
     async def _update_model_no_data(
-        self, bm_id: UUID, columns: models.UpdateColumnsLiteInput, comment: str | None = None
+        self, bm_id: UUID, columns: models.UpdateColumnsLite, comment: str | None = None
     ) -> Version:
-        """Helper to apply an UpdateColumnsLiteInput and return the resulting Version.
+        """Helper to apply an UpdateColumnsLite and return the resulting Version.
         This is for column operations where new data is not required.
         """
         update_response = await self._column_operations_api.update_block_model_from_latest_version(
             org_id=str(self._environment.org_id),
             workspace_id=str(self._environment.workspace_id),
             bm_id=str(bm_id),
-            update_data_lite_input=models.UpdateDataLiteInput(
+            update_data_lite=models.UpdateDataLite(
                 columns=columns,
                 comment=comment,
             ),
+            additional_headers=self._preview_headers(),
         )
 
         job_id = _job_id_from_url(update_response.job_url)
@@ -382,6 +419,7 @@ class BlockModelAPIClient(BaseAPIClient):
             workspace_id=str(self._environment.workspace_id),
             bm_id=str(bm_id),
             job_id=str(job_id),
+            additional_headers=self._preview_headers(),
         )
         job_status = await self._poll_job_url(bm_id, job_id)
         version = extract_payload(job_id, job_status, models.Version)
@@ -396,6 +434,7 @@ class BlockModelAPIClient(BaseAPIClient):
         response = await self._metadata_api.list_block_models(
             workspace_id=str(self._environment.workspace_id),
             org_id=str(self._environment.org_id),
+            additional_headers=self._preview_headers(),
         )
 
         return [self._bm_from_model(m) for m in response.results]
@@ -410,6 +449,7 @@ class BlockModelAPIClient(BaseAPIClient):
             bm_id=str(bm_id),
             workspace_id=str(self._environment.workspace_id),
             org_id=str(self._environment.org_id),
+            additional_headers=self._preview_headers(),
         )
         return self._bm_from_model(response)
 
@@ -442,6 +482,7 @@ class BlockModelAPIClient(BaseAPIClient):
                 offset=offset,
                 limit=page_limit,
                 deleted=deleted,
+                additional_headers=self._preview_headers(),
             )
 
             # Convert and append
@@ -459,26 +500,29 @@ class BlockModelAPIClient(BaseAPIClient):
 
         return all_models
 
-    async def list_versions(self, bm_id: UUID) -> list[Version]:
+    async def list_versions(self, bm_id: UUID) -> list[ListingVersion]:
         """List versions of a block model.
 
-        Returns a list of `Version`s for the block model referenced by `bm_id`,
+        Returns a list of `ListingVersion`s for the block model referenced by `bm_id`,
         limited to the first 100 results (or the service maximum).
 
         Versions are ordered from newest to oldest.
 
+        Listing columns never carry ``tags``; fetch a version individually to read tags.
+
         :param bm_id: The ID of the block model.
-        :return: A list of `Version` dataclasses for the block model, ordered newest to oldest.
+        :return: A list of `ListingVersion` dataclasses for the block model, ordered newest to oldest.
         """
         response = await self._versions_api.list_block_model_versions(
             workspace_id=str(self._environment.workspace_id),
             org_id=str(self._environment.org_id),
             bm_id=str(bm_id),
+            additional_headers=self._preview_headers(),
         )
 
-        return [_version_from_model(v) for v in response.results]
+        return [_version_listing_from_model(v) for v in response.results]
 
-    async def list_all_versions(self, bm_id: UUID, page_limit: int | None = 100) -> list[Version]:
+    async def list_all_versions(self, bm_id: UUID, page_limit: int | None = 100) -> list[ListingVersion]:
         """Return all versions of a block model, following paginated responses.
 
         This method will page through the `list_block_model_versions` endpoint using `offset` and `limit`
@@ -486,9 +530,11 @@ class BlockModelAPIClient(BaseAPIClient):
 
         Versions are ordered from newest to oldest.
 
+        Listing columns never carry ``tags``; fetch a version individually to read tags.
+
         :param bm_id: The ID of the block model.
         :param page_limit: Maximum items to request per page (1..100). Defaults to 100.
-        :return: A list of `Version` dataclasses for the block model, ordered newest to oldest.
+        :return: A list of `ListingVersion` dataclasses for the block model, ordered newest to oldest.
         """
         if page_limit is None:
             page_limit = 100
@@ -498,7 +544,7 @@ class BlockModelAPIClient(BaseAPIClient):
         page_limit = min(page_limit, 100)
 
         offset = 0
-        all_versions: list[Version] = []
+        all_versions: list[ListingVersion] = []
 
         while True:
             page = await self._versions_api.list_block_model_versions(
@@ -507,11 +553,12 @@ class BlockModelAPIClient(BaseAPIClient):
                 bm_id=str(bm_id),
                 offset=offset,
                 limit=page_limit,
+                additional_headers=self._preview_headers(),
             )
 
             # Convert and append
             for v in page.results:
-                all_versions.append(_version_from_model(v))
+                all_versions.append(_version_listing_from_model(v))
 
             # Determine stopping condition
             if page.count == 0:
@@ -524,6 +571,25 @@ class BlockModelAPIClient(BaseAPIClient):
 
         return all_versions
 
+    async def get_version(self, bm_id: UUID, version_uuid: UUID) -> Version:
+        """Get a single version of a block model, including each column's ``tags``.
+
+        Unlike :meth:`list_versions`, which returns ``ListingVersion``s whose columns never carry
+        ``tags``, this retrieves a single version whose columns carry their ``tags``.
+
+        :param bm_id: The ID of the block model.
+        :param version_uuid: The UUID of the version to retrieve.
+        :return: The ``Version``, with columns carrying their ``tags``.
+        """
+        response = await self._versions_api.retrieve_block_model_version(
+            version_id=str(version_uuid),
+            workspace_id=str(self._environment.workspace_id),
+            org_id=str(self._environment.org_id),
+            bm_id=str(bm_id),
+            additional_headers=self._preview_headers(),
+        )
+        return _version_from_model(response)
+
     async def create_block_model(
         self,
         name: str,
@@ -534,6 +600,7 @@ class BlockModelAPIClient(BaseAPIClient):
         size_unit_id: str | None = None,
         initial_data: Table | None = None,
         units: dict[str, str] | None = None,
+        tags: dict[str, dict[str, Any]] | None = None,
         comment: str | None = None,
         fill_subblocks: bool = False,
     ) -> tuple[BlockModel, Version]:
@@ -558,6 +625,8 @@ class BlockModelAPIClient(BaseAPIClient):
         :param size_unit_id: Unit ID denoting the length unit used for the block model's blocks.
         :param initial_data: The initial data to populate the block model with.
         :param units: A dictionary mapping column names within `initial_data` to units.
+        :param tags: A dictionary mapping column names within `initial_data` to their tags object. Column tags are a
+            preview feature; the client must be constructed with ``preview=True`` to use them.
         :param comment: An optional comment describing the initial data.
         :param fill_subblocks: Sets the default fill_subblocks behaviour for this block model. If ``True``, updates to a
             fully sub-blocked model with ``update_type``=``merge`` and ``geometry_change``=``True`` will fill any missing
@@ -566,6 +635,8 @@ class BlockModelAPIClient(BaseAPIClient):
         """
         if units is not None and initial_data is None:
             raise ValueError("units can only be provided if initial_data is provided")
+        if tags is not None and initial_data is None:
+            raise ValueError("tags can only be provided if initial_data is provided")
         if initial_data is not None and self._cache is None:
             raise CacheNotConfiguredException(
                 "Cache must be configured to use this method. Please set the 'cache' parameter in the constructor."
@@ -586,7 +657,7 @@ class BlockModelAPIClient(BaseAPIClient):
                 geometry_change = True
             else:
                 geometry_change = None
-            version = await self._add_new_columns(create_result.bm_uuid, initial_data, units, geometry_change)
+            version = await self._add_new_columns(create_result.bm_uuid, initial_data, units, geometry_change, tags)
         return self._bm_from_model(create_result), version
 
     async def add_new_subblocked_columns(
@@ -594,6 +665,7 @@ class BlockModelAPIClient(BaseAPIClient):
         bm_id: UUID,
         data: Table,
         units: dict[str, str] | None = None,
+        tags: dict[str, dict[str, Any]] | None = None,
     ) -> Version:
         """Add new columns to an existing sub-blocked block model. This will not change the sub-blocking structure, thus the provided data must match existing sub-blocks in the model.
 
@@ -604,10 +676,12 @@ class BlockModelAPIClient(BaseAPIClient):
         :param bm_id: The ID of the block model to add columns to.
         :param data: The data containing the new columns to add.
         :param units: A dictionary mapping column names within `data` to units.
+        :param tags: A dictionary mapping column names within `data` to their tags object. Column tags are a preview
+            feature; the client must be constructed with ``preview=True`` to use them.
         :raises CacheNotConfiguredException: If the cache is not configured.
         :return: The new version of the block model with the added columns.
         """
-        return await self._add_new_columns(bm_id, data, units, geometry_change=False)
+        return await self._add_new_columns(bm_id, data, units, geometry_change=False, tags=tags)
 
     async def _add_new_columns(
         self,
@@ -615,6 +689,7 @@ class BlockModelAPIClient(BaseAPIClient):
         data: Table,
         units: dict[str, str] | None = None,
         geometry_change: bool | None = None,
+        tags: dict[str, dict[str, Any]] | None = None,
     ) -> Version:
         """Add new columns to an existing block model.
 
@@ -628,6 +703,8 @@ class BlockModelAPIClient(BaseAPIClient):
         :param data: The data containing the new columns to add.
         :param units: A dictionary mapping column names within `data` to units.
         :param geometry_change: Whether the geometry of the block model is changing.
+        :param tags: A dictionary mapping column names within `data` to their tags object. Column tags are a preview
+            feature; the client must be constructed with ``preview=True`` to use them.
         :raises CacheNotConfiguredException: If the cache is not configured.
         :return: The new version of the block model with the added columns.
         """
@@ -639,9 +716,23 @@ class BlockModelAPIClient(BaseAPIClient):
         schema = data.schema
         if units is None:
             units = {}
-        columns = models.UpdateColumnsLiteInput(
+        if tags is None:
+            tags = {}
+        new_column_names = {name for name in schema.names if name not in _GEOMETRY_COLUMNS}
+        unknown_unit_columns = set(units) - new_column_names
+        if unknown_unit_columns:
+            raise MissingColumnInTable(f"units reference columns that are not being added: {unknown_unit_columns}")
+        unknown_tag_columns = set(tags) - new_column_names
+        if unknown_tag_columns:
+            raise MissingColumnInTable(f"tags reference columns that are not being added: {unknown_tag_columns}")
+        columns = models.UpdateColumnsLite(
             new=[
-                models.ColumnLite(title=name, data_type=convert_dtype(data_type), unit_id=units.get(name))
+                models.ColumnLite(
+                    title=name,
+                    data_type=convert_dtype(data_type),
+                    unit_id=units.get(name),
+                    **({"tags": tags[name]} if name in tags else {}),
+                )
                 for name, data_type in zip(schema.names, schema.types)
                 if name not in _GEOMETRY_COLUMNS
             ],
@@ -653,11 +744,12 @@ class BlockModelAPIClient(BaseAPIClient):
             org_id=str(self._environment.org_id),
             workspace_id=str(self._environment.workspace_id),
             bm_id=str(bm_id),
-            update_data_lite_input=models.UpdateDataLiteInput(
+            update_data_lite=models.UpdateDataLite(
                 columns=columns,
                 update_type=models.UpdateType.replace,
                 geometry_change=geometry_change,
             ),
+            additional_headers=self._preview_headers(),
         )
         return await self._upload_data(bm_id, update_response.job_uuid, str(update_response.upload_url), data)
 
@@ -666,6 +758,7 @@ class BlockModelAPIClient(BaseAPIClient):
         bm_id: UUID,
         data: Table,
         units: dict[str, str] | None = None,
+        tags: dict[str, dict[str, Any]] | None = None,
     ) -> Version:
         """Add new columns to an existing regular block model.
 
@@ -676,10 +769,12 @@ class BlockModelAPIClient(BaseAPIClient):
         :param bm_id: The ID of the block model to add columns to.
         :param data: The data containing the new columns to add.
         :param units: A dictionary mapping column names within `data` to units.
+        :param tags: A dictionary mapping column names within `data` to their tags object. Column tags are a preview
+            feature; the client must be constructed with ``preview=True`` to use them.
         :raises CacheNotConfiguredException: If the cache is not configured.
         :return: The new version of the block model with the added columns.
         """
-        return await self._add_new_columns(bm_id, data, units, geometry_change=None)
+        return await self._add_new_columns(bm_id, data, units, geometry_change=None, tags=tags)
 
     async def _update_columns(
         self,
@@ -691,6 +786,7 @@ class BlockModelAPIClient(BaseAPIClient):
         units: dict[str, str] | None = None,
         geometry_change: bool | None = None,
         fill_subblocks: bool | None = None,
+        tags: dict[str, dict[str, Any]] | None = None,
     ) -> Version:
         if self._cache is None:
             raise CacheNotConfiguredException(
@@ -700,6 +796,8 @@ class BlockModelAPIClient(BaseAPIClient):
         schema = data.schema
         if units is None:
             units = {}
+        if tags is None:
+            tags = {}
         data_type_map = {name: data_type for name, data_type in zip(schema.names, schema.types)}
 
         if update_columns is None:
@@ -713,10 +811,27 @@ class BlockModelAPIClient(BaseAPIClient):
         if missing:
             raise MissingColumnInTable(f"Columns {missing} are not present in the provided table.")
 
-        columns = models.UpdateColumnsLiteInput(
+        unknown_unit_columns = set(units) - set(new_columns)
+        if unknown_unit_columns:
+            raise MissingColumnInTable(
+                f"units reference columns that are not in new_columns: {unknown_unit_columns}. "
+                "To set units on existing columns, use update_column_metadata."
+            )
+
+        unknown_tag_columns = set(tags) - set(new_columns)
+        if unknown_tag_columns:
+            raise MissingColumnInTable(
+                f"tags reference columns that are not in new_columns: {unknown_tag_columns}. "
+                "To tag existing columns, use update_column_metadata."
+            )
+
+        columns = models.UpdateColumnsLite(
             new=[
                 models.ColumnLite(
-                    title=new_column, data_type=convert_dtype(data_type_map[new_column]), unit_id=units.get(new_column)
+                    title=new_column,
+                    data_type=convert_dtype(data_type_map[new_column]),
+                    unit_id=units.get(new_column),
+                    **({"tags": tags[new_column]} if new_column in tags else {}),
                 )
                 for new_column in new_columns
             ],
@@ -728,12 +843,13 @@ class BlockModelAPIClient(BaseAPIClient):
             org_id=str(self._environment.org_id),
             workspace_id=str(self._environment.workspace_id),
             bm_id=str(bm_id),
-            update_data_lite_input=models.UpdateDataLiteInput(
+            update_data_lite=models.UpdateDataLite(
                 columns=columns,
                 update_type=models.UpdateType.replace,
                 geometry_change=geometry_change,
                 **({} if fill_subblocks is None else {"fill_subblocks": fill_subblocks}),
             ),
+            additional_headers=self._preview_headers(),
         )
         return await self._upload_data(bm_id, update_response.job_uuid, str(update_response.upload_url), data)
 
@@ -745,6 +861,7 @@ class BlockModelAPIClient(BaseAPIClient):
         update_columns: set[str] | None = None,
         delete_columns: set[str] | None = None,
         units: dict[str, str] | None = None,
+        tags: dict[str, dict[str, Any]] | None = None,
     ) -> Version:
         """Add, update, or delete regular block model columns.
 
@@ -758,11 +875,13 @@ class BlockModelAPIClient(BaseAPIClient):
         :param update_columns: A set of column names to update in the block model.
         :param delete_columns: A set of column names to delete from the block model.
         :param units: A dictionary mapping column names within `data` to units.
+        :param tags: A dictionary mapping new column names to their tags object. Column tags are a preview feature; the
+            client must be constructed with ``preview=True`` to use them.
         :raises CacheNotConfiguredException: If the cache is not configured.
         :return: The new version of the block model with the added columns.
         """
         return await self._update_columns(
-            bm_id, data, new_columns, update_columns, delete_columns, units, geometry_change=None
+            bm_id, data, new_columns, update_columns, delete_columns, units, geometry_change=None, tags=tags
         )
 
     async def update_subblocked_columns(
@@ -775,6 +894,7 @@ class BlockModelAPIClient(BaseAPIClient):
         units: dict[str, str] | None = None,
         geometry_change: bool = False,
         fill_subblocks: bool | None = None,
+        tags: dict[str, dict[str, Any]] | None = None,
     ) -> Version:
         """Add, update, or delete sub-blocked block model columns.
 
@@ -797,6 +917,8 @@ class BlockModelAPIClient(BaseAPIClient):
         :param fill_subblocks: If ``True``, any missing sub-blocks will be filled with data from the parent block.
             Only applicable for fully sub-blocked models when ``geometry_change`` is ``True``. If ``None`` (the default),
             the block model's own ``fill_subblocks`` setting is used.
+        :param tags: A dictionary mapping new column names to their tags object. Column tags are a preview feature; the
+            client must be constructed with ``preview=True`` to use them.
         """
         return await self._update_columns(
             bm_id,
@@ -807,31 +929,49 @@ class BlockModelAPIClient(BaseAPIClient):
             units,
             geometry_change=geometry_change,
             fill_subblocks=fill_subblocks,
+            tags=tags,
         )
 
     async def update_column_metadata(
         self,
         bm_id: UUID,
-        column_updates: dict[str, str | None],
+        column_updates: dict[str, str | None | ColumnMetadataUpdate],
         comment: str | None = None,
     ) -> Version:
-        """Update metadata (e.g., units) for existing block model columns.
+        """Update metadata (e.g., units and tags) for existing block model columns.
 
         This method updates column properties without requiring data upload or cache configuration.
 
+        Each entry in `column_updates` maps a column title to its update:
+
+        - A ``str`` sets the column's unit ID.
+        - ``None`` clears the column's unit ID.
+        - A :class:`ColumnMetadataUpdate` sets any combination of unit ID and/or tags. Only the
+          fields explicitly set on the object are sent; unset fields are left untouched. Set
+          ``tags={}`` to clear a column's tags, or ``unit_id=None`` to clear its unit.
+
+        Column tags are a preview feature; the client must be constructed with ``preview=True`` to use them.
+
         :param bm_id: The ID of the block model to update.
-        :param column_updates: A dictionary mapping column titles to their new unit IDs.
-                               Set the unit ID to None to remove the unit.
-                               Example: {"Cu": "%[mass]", "Au": None}
+        :param column_updates: A dictionary mapping column titles to their metadata update.
+                               Example: {"Cu": "%[mass]", "Au": None,
+                               "Ag": ColumnMetadataUpdate(tags={"source": "assay"})}
         :param comment: An optional comment describing the metadata changes. This is max 250 characters.
         :return: The new version of the block model with updated metadata.
         """
+
+        def _to_values(value: str | None | ColumnMetadataUpdate) -> models.UpdateMetadataValues:
+            if isinstance(value, ColumnMetadataUpdate):
+                # Only forward fields the caller set, so untouched fields are omitted on the wire.
+                return models.UpdateMetadataValues(**value.model_dump(exclude_unset=True))
+            return models.UpdateMetadataValues(unit_id=value)
+
         update_metadata_list = [
-            models.UpdateMetadataLite(title=col_title, values=models.UpdateMetadataValues(unit_id=unit_id))
-            for col_title, unit_id in column_updates.items()
+            models.UpdateMetadataLite(title=col_title, values=_to_values(value))
+            for col_title, value in column_updates.items()
         ]
 
-        columns = models.UpdateColumnsLiteInput(
+        columns = models.UpdateColumnsLite(
             new=[],
             update=[],
             delete=[],
@@ -861,7 +1001,7 @@ class BlockModelAPIClient(BaseAPIClient):
             models.RenameLite(title=old_title, new_title=new_title) for old_title, new_title in column_renames.items()
         ]
 
-        columns = models.UpdateColumnsLiteInput(
+        columns = models.UpdateColumnsLite(
             new=[],
             update=[],
             delete=[],
@@ -885,7 +1025,7 @@ class BlockModelAPIClient(BaseAPIClient):
         :param comment: An optional comment describing the rename operation. This is max 250 characters.
         :return: The new version of the block model with renamed columns.
         """
-        columns = models.UpdateColumnsLiteInput(
+        columns = models.UpdateColumnsLite(
             new=[],
             update=[],
             delete=column_titles,
@@ -941,6 +1081,7 @@ class BlockModelAPIClient(BaseAPIClient):
                     exclude_null_rows=exclude_null_rows,
                 ),
             ),
+            additional_headers=self._preview_headers(),
         )
 
         # Poll the job URL until it is complete
@@ -999,7 +1140,7 @@ class BlockModelAPIClient(BaseAPIClient):
         version_id: UUID,
         bm_id: UUID,
         delta_request_data: DeltaRequestData,
-    ) -> DeltaResponseData | EmptyResponse:
+    ) -> ListingDeltaResponseData | EmptyResponse:
         """Check for changes to a block model between two versions within a bounding box.
 
         Delegates to the versions API ``get_deltas_for_block_model`` endpoint. Changes
@@ -1009,7 +1150,7 @@ class BlockModelAPIClient(BaseAPIClient):
         :param version_id: The starting version UUID (changes are searched *after* this version).
         :param bm_id: The ID of the block model.
         :param delta_request_data: The delta request payload specifying columns, bounding box, and options.
-        :return: A ``DeltaResponseData`` describing any detected changes, or an ``EmptyResponse`` (HTTP 304)
+        :return: A ``ListingDeltaResponseData`` describing any detected changes, or an ``EmptyResponse`` (HTTP 304)
             when no changes are found.
         """
         return await self._versions_api.get_deltas_for_block_model(
@@ -1018,6 +1159,7 @@ class BlockModelAPIClient(BaseAPIClient):
             str(self._environment.org_id),
             str(bm_id),
             delta_request_data,
+            additional_headers=self._preview_headers(),
         )
 
     async def update_block_model_metadata(
@@ -1039,6 +1181,7 @@ class BlockModelAPIClient(BaseAPIClient):
             org_id=str(self._environment.org_id),
             bm_id=str(bm_id),
             update_block_model=update_block_model,
+            additional_headers=self._preview_headers(),
         )
         return self._bm_from_model(response)
 
@@ -1049,7 +1192,8 @@ class BlockModelAPIClient(BaseAPIClient):
         :return: An empty response on success.
         """
         return await self._operations_api.delete_block_model(
-            str(bm_id),
-            str(self._environment.workspace_id),
-            str(self._environment.org_id),
+            bm_id=str(bm_id),
+            workspace_id=str(self._environment.workspace_id),
+            org_id=str(self._environment.org_id),
+            additional_headers=self._preview_headers(),
         )

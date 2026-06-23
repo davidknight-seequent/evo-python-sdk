@@ -11,7 +11,7 @@
 
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Iterable
 from unittest import mock
 
@@ -19,6 +19,7 @@ import pyarrow
 from parameterized import parameterized
 
 from evo.blockmodels import BlockModelAPIClient
+from evo.blockmodels.data import ColumnMetadataUpdate
 from evo.blockmodels.endpoints import models
 from evo.blockmodels.endpoints.models import JobResponse, JobStatus
 from evo.blockmodels.exceptions import CacheNotConfiguredException, JobFailedException, MissingColumnInTable
@@ -31,7 +32,7 @@ from utils import JobPollingRequestHandler
 BM_UUID = uuid.uuid4()
 GOOSE_UUID = uuid.uuid4()
 GOOSE_VERSION_ID = "2"
-DATE = datetime(2021, 1, 1)
+DATE = datetime(2021, 1, 1, tzinfo=timezone.utc)
 MODEL_USER = models.UserInfo(email="test@test.com", name="Test User", id=uuid.uuid4())
 USER = ServiceUser.from_model(MODEL_USER)
 
@@ -55,9 +56,9 @@ def _mock_version(
 
 
 UPDATE_RESULT = models.UpdateWithUrl(
-    changes=models.UpdateDataLiteOutput(
+    changes=models.UpdateDataLite(
         # We don't look at these values, so we can just set them to empty
-        columns=models.UpdateColumnsLiteOutput(new=[], update=[], rename=[], delete=[])
+        columns=models.UpdateColumnsLite(new=[], update=[], rename=[], delete=[])
     ),
     version_uuid=uuid.uuid4(),
     job_uuid=uuid.uuid4(),
@@ -135,6 +136,11 @@ class TestUpdateBlockModel(TestWithConnector, TestWithStorage):
         TestWithStorage.setUp(self)
         self.bms_client = BlockModelAPIClient(connector=self.connector, environment=self.environment, cache=self.cache)
         self.bms_client_without_cache = BlockModelAPIClient(connector=self.connector, environment=self.environment)
+        self.preview_client_without_cache = BlockModelAPIClient(
+            connector=self.connector,
+            environment=self.environment,
+            preview=True,
+        )
         self.setup_universal_headers(get_header_metadata(BlockModelAPIClient.__module__))
 
     @property
@@ -163,8 +169,8 @@ class TestUpdateBlockModel(TestWithConnector, TestWithStorage):
             mock_destination.upload_file.assert_called_once()
 
             # Assert that the correct columns are part of the update
-            expected_update_body = models.UpdateDataLiteInput(
-                columns=models.UpdateColumnsLiteInput(
+            expected_update_body = models.UpdateDataLite(
+                columns=models.UpdateColumnsLite(
                     new=[
                         models.ColumnLite(
                             title="col1",
@@ -206,6 +212,78 @@ class TestUpdateBlockModel(TestWithConnector, TestWithStorage):
         self.assertEqual(version.created_by, USER)
         self.assertEqual(version.columns, UPDATED_VERSION.mapping.columns)
 
+    async def test_add_new_columns_with_tags(self) -> None:
+        self.transport.set_request_handler(
+            UpdateRequestHandler(
+                update_result=UPDATE_RESULT,
+                job_response=JobResponse(
+                    job_status=JobStatus.COMPLETE,
+                    payload=UPDATED_VERSION,
+                ),
+            )
+        )
+        with (
+            mock.patch("evo.common.io.upload.StorageDestination") as mock_destination,
+        ):
+            mock_destination.upload_file = mock.AsyncMock()
+            await self.bms_client.add_new_columns(
+                BM_UUID,
+                REGULAR_DATA,
+                units={"col2": "g/t"},
+                tags={"col2": {"source": "assay", "verified": True}},
+            )
+            mock_destination.upload_file.assert_called_once()
+
+            # col2 carries tags; col1 has none, so its body must not contain a tags field.
+            expected_update_body = models.UpdateDataLite(
+                columns=models.UpdateColumnsLite(
+                    new=[
+                        models.ColumnLite(
+                            title="col1",
+                            data_type=models.DataType.Utf8,
+                            unit_id=None,
+                        ),
+                        models.ColumnLite(
+                            title="col2",
+                            data_type=models.DataType.Float64,
+                            unit_id="g/t",
+                            tags={"source": "assay", "verified": True},
+                        ),
+                    ],
+                    update=[],
+                    rename=[],
+                    delete=[],
+                ),
+                update_type=models.UpdateType.replace,
+                geometry_change=None,
+            )
+            self.assert_any_request_made(
+                method=RequestMethod.PATCH,
+                path=f"{self.base_path}/block-models/{BM_UUID}/blocks",
+                body=expected_update_body.model_dump(mode="json", exclude_unset=True),
+                headers={
+                    "Authorization": "Bearer <not-a-real-token>",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
+            )
+
+    async def test_add_new_columns_with_unknown_tag_column(self) -> None:
+        with self.assertRaises(MissingColumnInTable):
+            await self.bms_client.add_new_columns(
+                BM_UUID,
+                REGULAR_DATA,
+                tags={"typo_col": {"source": "assay"}},
+            )
+
+    async def test_add_new_columns_with_unknown_unit_column(self) -> None:
+        with self.assertRaises(MissingColumnInTable):
+            await self.bms_client.add_new_columns(
+                BM_UUID,
+                REGULAR_DATA,
+                units={"typo_col": "g/t"},
+            )
+
     async def test_add_new_subblocked_columns(self) -> None:
         self.transport.set_request_handler(
             UpdateRequestHandler(
@@ -228,8 +306,8 @@ class TestUpdateBlockModel(TestWithConnector, TestWithStorage):
             mock_destination.upload_file.assert_called_once()
 
             # Assert that the correct columns are part of the update
-            expected_update_body = models.UpdateDataLiteInput(
-                columns=models.UpdateColumnsLiteInput(
+            expected_update_body = models.UpdateDataLite(
+                columns=models.UpdateColumnsLite(
                     new=[
                         models.ColumnLite(
                             title="col1",
@@ -329,8 +407,8 @@ class TestUpdateBlockModel(TestWithConnector, TestWithStorage):
             mock_destination.upload_file.assert_called_once()
 
             # Assert that the correct columns are part of the update
-            expected_update_body = models.UpdateDataLiteInput(
-                columns=models.UpdateColumnsLiteInput(
+            expected_update_body = models.UpdateDataLite(
+                columns=models.UpdateColumnsLite(
                     new=[
                         models.ColumnLite(
                             title="col2",
@@ -381,6 +459,25 @@ class TestUpdateBlockModel(TestWithConnector, TestWithStorage):
                 BM_UUID,
                 REGULAR_DATA,
                 new_columns=["non_existent_column"],
+            )
+
+    async def test_update_columns_with_unknown_tag_column(self) -> None:
+        with self.assertRaises(MissingColumnInTable):
+            await self.bms_client.update_block_model_columns(
+                BM_UUID,
+                REGULAR_DATA,
+                new_columns=["col2"],
+                tags={"col1": {"source": "assay"}},
+            )
+
+    async def test_update_columns_with_unknown_unit_column(self) -> None:
+        with self.assertRaises(MissingColumnInTable):
+            await self.bms_client.update_block_model_columns(
+                BM_UUID,
+                REGULAR_DATA,
+                new_columns=["col2"],
+                update_columns={"col1"},
+                units={"col1": "g/t"},
             )
 
     async def test_update_columns_job_failed(self) -> None:
@@ -442,8 +539,8 @@ class TestUpdateBlockModel(TestWithConnector, TestWithStorage):
             mock_destination.upload_file.assert_called_once()
 
             # Assert that the correct columns are part of the update
-            expected_update_body = models.UpdateDataLiteInput(
-                columns=models.UpdateColumnsLiteInput(
+            expected_update_body = models.UpdateDataLite(
+                columns=models.UpdateColumnsLite(
                     new=[
                         models.ColumnLite(
                             title="col2",
@@ -481,7 +578,7 @@ class TestUpdateBlockModel(TestWithConnector, TestWithStorage):
         self.assertEqual(version.columns, UPDATED_VERSION.mapping.columns)
 
     async def test_update_subblocked_columns_with_fill_subblocks(self) -> None:
-        """Test that fill_subblocks is passed through to UpdateDataLiteInput."""
+        """Test that fill_subblocks is passed through to UpdateDataLite."""
         self.transport.set_request_handler(
             UpdateRequestHandler(
                 update_result=UPDATE_RESULT,
@@ -507,8 +604,8 @@ class TestUpdateBlockModel(TestWithConnector, TestWithStorage):
             )
             mock_destination.upload_file.assert_called_once()
 
-            expected_update_body = models.UpdateDataLiteInput(
-                columns=models.UpdateColumnsLiteInput(
+            expected_update_body = models.UpdateDataLite(
+                columns=models.UpdateColumnsLite(
                     new=[
                         models.ColumnLite(
                             title="col2",
@@ -581,6 +678,59 @@ class TestUpdateBlockModel(TestWithConnector, TestWithStorage):
                 column_updates={"col1": "%[mass]"},
             )
 
+    async def test_update_column_metadata_with_tags(self) -> None:
+        self.transport.set_request_handler(
+            UpdateRequestHandler(
+                update_result=UPDATE_RESULT,
+                job_response=JobResponse(
+                    job_status=JobStatus.COMPLETE,
+                    payload=UPDATED_VERSION,
+                ),
+            )
+        )
+        await self.bms_client_without_cache.update_column_metadata(
+            BM_UUID,
+            column_updates={
+                "col1": "%[mass]",  # plain str -> set unit only
+                "col2": ColumnMetadataUpdate(tags={"source": "assay"}),  # tags only, unit untouched
+                "col3": ColumnMetadataUpdate(unit_id=None, tags={}),  # clear unit and tags
+            },
+        )
+
+        expected_update_body = models.UpdateDataLite(
+            columns=models.UpdateColumnsLite(
+                new=[],
+                update=[],
+                rename=[],
+                delete=[],
+                update_metadata=[
+                    models.UpdateMetadataLite(
+                        title="col1",
+                        values=models.UpdateMetadataValues(unit_id="%[mass]"),
+                    ),
+                    models.UpdateMetadataLite(
+                        title="col2",
+                        values=models.UpdateMetadataValues(tags={"source": "assay"}),
+                    ),
+                    models.UpdateMetadataLite(
+                        title="col3",
+                        values=models.UpdateMetadataValues(unit_id=None, tags={}),
+                    ),
+                ],
+            ),
+            comment=None,
+        )
+        self.assert_any_request_made(
+            method=RequestMethod.PATCH,
+            path=f"{self.base_path}/block-models/{BM_UUID}/blocks",
+            body=expected_update_body.model_dump(mode="json", exclude_unset=True),
+            headers={
+                "Authorization": "Bearer <not-a-real-token>",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+        )
+
     async def test_update_column_metadata_with_comment(self) -> None:
         self.transport.set_request_handler(
             UpdateRequestHandler(
@@ -598,8 +748,8 @@ class TestUpdateBlockModel(TestWithConnector, TestWithStorage):
         )
 
         # Assert that the correct metadata update with comment is part of the request
-        expected_update_body = models.UpdateDataLiteInput(
-            columns=models.UpdateColumnsLiteInput(
+        expected_update_body = models.UpdateDataLite(
+            columns=models.UpdateColumnsLite(
                 new=[],
                 update=[],
                 rename=[],
@@ -628,6 +778,49 @@ class TestUpdateBlockModel(TestWithConnector, TestWithStorage):
             },
         )
         self.assertEqual(version.bm_uuid, BM_UUID)
+
+    async def test_update_column_metadata_with_preview_sends_header(self) -> None:
+        self.transport.set_request_handler(
+            UpdateRequestHandler(
+                update_result=UPDATE_RESULT,
+                job_response=JobResponse(
+                    job_status=JobStatus.COMPLETE,
+                    payload=UPDATED_VERSION,
+                ),
+            )
+        )
+
+        version = await self.preview_client_without_cache.update_column_metadata(
+            BM_UUID,
+            column_updates={"col1": "%[mass]"},
+        )
+
+        expected_update_body = models.UpdateDataLite(
+            columns=models.UpdateColumnsLite(
+                new=[],
+                update=[],
+                rename=[],
+                delete=[],
+                update_metadata=[
+                    models.UpdateMetadataLite(
+                        title="col1",
+                        values=models.UpdateMetadataValues(unit_id="%[mass]"),
+                    ),
+                ],
+            ),
+            comment=None,
+        )
+        self.assert_any_request_made(
+            method=RequestMethod.PATCH,
+            path=f"{self.base_path}/block-models/{BM_UUID}/blocks",
+            body=expected_update_body.model_dump(mode="json", exclude_unset=True),
+            headers={
+                "Authorization": "Bearer <not-a-real-token>",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "API-Preview": "opt-in",
+            },
+        )
         self.assertEqual(version.version_id, 2)
 
     async def test_rename_block_model_columns(self) -> None:
@@ -666,8 +859,8 @@ class TestUpdateBlockModel(TestWithConnector, TestWithStorage):
         )
 
         # Assert that the correct rename request with comment was made
-        expected_update_body = models.UpdateDataLiteInput(
-            columns=models.UpdateColumnsLiteInput(
+        expected_update_body = models.UpdateDataLite(
+            columns=models.UpdateColumnsLite(
                 new=[],
                 update=[],
                 delete=[],
@@ -746,8 +939,8 @@ class TestUpdateBlockModel(TestWithConnector, TestWithStorage):
             BM_UUID, ["col1", "col2"], comment="Remove unused columns"
         )
 
-        expected_update_body = models.UpdateDataLiteInput(
-            columns=models.UpdateColumnsLiteInput(
+        expected_update_body = models.UpdateDataLite(
+            columns=models.UpdateColumnsLite(
                 new=[],
                 update=[],
                 delete=["col1", "col2"],

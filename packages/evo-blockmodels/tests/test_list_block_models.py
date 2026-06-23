@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from evo.blockmodels import BlockModelAPIClient
-from evo.blockmodels.data import RegularGridDefinition, Version
+from evo.blockmodels.data import ListingVersion, RegularGridDefinition
 from evo.common import Environment
 from evo.common.test_tools import (
     BASE_URL,
@@ -22,6 +22,7 @@ class TestListBlockModels(TestWithConnector, TestWithStorage):
         TestWithStorage.setUp(self)
         self.environment = Environment(hub_url=BASE_URL, org_id=ORG.id, workspace_id=WORKSPACE_ID)
         self.client = BlockModelAPIClient(connector=self.connector, environment=self.environment)
+        self.preview_client = BlockModelAPIClient(connector=self.connector, environment=self.environment, preview=True)
 
     def make_bm(self, name: str):
         return {
@@ -134,10 +135,23 @@ class TestListBlockModels(TestWithConnector, TestWithStorage):
         ):
             result = await self.client.list_versions(bm_id)
         self.assertEqual(len(result), 2)
-        self.assertIsInstance(result[0], Version)
-        self.assertIsInstance(result[1], Version)
+        self.assertIsInstance(result[0], ListingVersion)
+        self.assertIsInstance(result[1], ListingVersion)
         self.assertEqual(result[0].version_id, 2)
         self.assertEqual(result[1].version_id, 1)
+
+    async def test_list_versions_with_preview_sends_header(self) -> None:
+        bm_id = uuid.uuid4()
+        v1 = self.make_version(1, str(uuid.uuid4()))
+        with self.transport.set_http_response(
+            200,
+            json.dumps({"count": 1, "limit": 100, "offset": 0, "results": [v1], "total": 1, "referenced_units": []}),
+            headers={"Content-Type": "application/json"},
+        ):
+            await self.preview_client.list_versions(bm_id)
+
+        request_headers = self.transport.request.call_args.kwargs["headers"]
+        self.assertEqual(request_headers["Api-Preview"], "opt-in")
 
     async def test_list_versions_empty_returns_empty(self) -> None:
         bm_id = uuid.uuid4()
@@ -148,6 +162,46 @@ class TestListBlockModels(TestWithConnector, TestWithStorage):
         ):
             result = await self.client.list_versions(bm_id)
         self.assertEqual(result, [])
+
+    async def test_get_version_returns_version_with_tags(self) -> None:
+        from evo.blockmodels.data import Version
+
+        bm_id = uuid.uuid4()
+        version_uuid = uuid.uuid4()
+        version = self.make_version(2, str(version_uuid))
+        version["mapping"]["columns"] = [
+            {
+                "col_id": str(uuid.uuid4()),
+                "data_type": "Float64",
+                "title": "Au",
+                "unit_id": "g/t",
+                "tags": {"source": "assay"},
+            }
+        ]
+        with self.transport.set_http_response(
+            200,
+            json.dumps(version),
+            headers={"Content-Type": "application/json"},
+        ):
+            result = await self.client.get_version(bm_id, version_uuid)
+
+        self.assertIsInstance(result, Version)
+        self.assertEqual(result.version_id, 2)
+        self.assertEqual(result.columns[0].tags, {"source": "assay"})
+
+    async def test_get_version_with_preview_sends_header(self) -> None:
+        bm_id = uuid.uuid4()
+        version_uuid = uuid.uuid4()
+        version = self.make_version(1, str(version_uuid))
+        with self.transport.set_http_response(
+            200,
+            json.dumps(version),
+            headers={"Content-Type": "application/json"},
+        ):
+            await self.preview_client.get_version(bm_id, version_uuid)
+
+        request_headers = self.transport.request.call_args.kwargs["headers"]
+        self.assertEqual(request_headers["Api-Preview"], "opt-in")
 
     async def test_list_all_versions_returns_all_versions(self) -> None:
         bm_id = uuid.uuid4()
@@ -166,8 +220,8 @@ class TestListBlockModels(TestWithConnector, TestWithStorage):
 
         result = await self.client.list_all_versions(bm_id, page_limit=2)
         self.assertEqual(len(result), 2)
-        self.assertIsInstance(result[0], Version)
-        self.assertIsInstance(result[1], Version)
+        self.assertIsInstance(result[0], ListingVersion)
+        self.assertIsInstance(result[1], ListingVersion)
         self.assertEqual(result[0].version_id, 2)
         self.assertEqual(result[1].version_id, 1)
 
