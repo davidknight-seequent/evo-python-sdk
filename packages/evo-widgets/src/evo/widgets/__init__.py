@@ -1,4 +1,4 @@
-#  Copyright © 2025 Bentley Systems, Incorporated
+#  Copyright © 2026 Bentley Systems, Incorporated
 #  Licensed under the Apache License, Version 2.0 (the "License");
 #  you may not use this file except in compliance with the License.
 #  You may obtain a copy of the License at
@@ -39,6 +39,7 @@ from .formatters import (
     format_block_model,
     format_block_model_attributes,
     format_block_model_version,
+    format_downhole_collection,
     format_report,
     format_report_result,
     format_task_result_list,
@@ -157,6 +158,12 @@ def _register_formatters(ipython: InteractiveShell) -> None:
         "evo.objects.typed.attributes",
         "BlockModelAttributes",
         format_block_model_attributes,
+    )
+
+    html_formatter.for_type_by_name(
+        "evo.objects.typed.downhole_collection",
+        "DownholeCollection",
+        format_downhole_collection,
     )
 
     # Register formatters for compute task results
