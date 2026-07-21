@@ -926,7 +926,6 @@ name = "evo-code-samples"
 version = "0.0.1"
 source = { virtual = "." }
 dependencies = [
-    { name = "anywidget" },
     { name = "evo-compute" },
     { name = "evo-schemas" },
     { name = "evo-sdk" },
@@ -957,7 +956,6 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "anywidget", specifier = "==0.11.0" },
     { name = "evo-compute", specifier = ">=0.0.3" },
     { name = "evo-schemas", specifier = ">=2025.12.15" },
     { name = "evo-sdk", editable = "../" },
@@ -1317,18 +1315,24 @@ test = [
 
 [[package]]
 name = "evo-widgets"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "../packages/evo-widgets" }
 dependencies = [
+    { name = "anywidget" },
     { name = "evo-sdk-common" },
+    { name = "httpx" },
     { name = "ipython", version = "8.39.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "ipython", version = "9.13.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "traitlets" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "anywidget", specifier = ">=0.9.13" },
     { name = "evo-sdk-common", editable = "../packages/evo-sdk-common" },
+    { name = "httpx", specifier = ">=0.27" },
     { name = "ipython", specifier = ">=7.0.0" },
+    { name = "traitlets", specifier = ">=5.9" },
 ]
 
 [package.metadata.requires-dev]

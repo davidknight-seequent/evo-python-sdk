@@ -59,6 +59,29 @@ grid  # Displays formatted HTML with Portal/Viewer links
 
 ## Features
 
+### 3D Visualisation
+
+Render supported Evo geoscience objects directly in a Jupyter notebook. The viewer downloads
+OGC 3D Tiles through the authenticated SDK connector, so credentials never reach the browser.
+
+```python
+from evo.notebooks import ServiceManagerWidget
+from evo.widgets import EvoObjectViewer, download_tileset_bundle, list_visualizable_objects
+
+manager = await ServiceManagerWidget.with_auth_code(client_id="your-client-id").login()
+objects = await list_visualizable_objects(manager)
+bundle = await download_tileset_bundle(manager, objects[0].object_id, name=objects[0].name)
+
+viewer = EvoObjectViewer(axis_labels=["Easting", "Northing", "Elevation"])
+viewer.add_bundle(bundle)
+viewer
+```
+
+Call `add_bundle()` again to layer objects in the same scene, or `clear()` to empty it. The
+viewer supports visualisation-service pointsets, meshes, downhole data, and regular 2D grids.
+Object attributes and their Evo colormaps are
+included when available, allowing attribute-driven colouring in the viewer.
+
 ### HTML Formatters
 
 Rich HTML representations for all typed geoscience objects:
@@ -155,6 +178,14 @@ viewer_url = get_viewer_url_from_reference(ref_url)
 |----------|-------------|
 | `format_base_object(obj)` | Format a typed geoscience object as HTML |
 | `format_attributes_collection(obj)` | Format an attributes collection as HTML |
+
+### Visualisation
+
+| API | Description |
+|-----|-------------|
+| `list_visualizable_objects(manager)` | List workspace objects supported by the 3D viewer |
+| `download_tileset_bundle(manager, object_id)` | Download an authenticated 3D Tiles bundle for the browser |
+| `EvoObjectViewer` | Display one or more downloaded bundles in a notebook |
 
 ## How It Works
 

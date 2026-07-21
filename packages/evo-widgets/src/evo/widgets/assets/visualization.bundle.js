@@ -37337,7 +37337,7 @@ var TilesRenderer = class extends TilesRendererBase {
   );
 });
 
-// evo_viz/static/widget_v3.js
+// src/evo/widgets/assets/visualization.js
 var dependencies = { THREE: three_module_exports, OrbitControls, CSS2DRenderer, CSS2DObject, TilesRenderer };
 var g = globalThis;
 if (!g.__evoVizRegistry) {
@@ -37866,7 +37866,7 @@ function buildAxes(box, axisLabels, tickCount, THREE, CSS2DObject2) {
   addTicks(niceTicks(min.z, max.z, tickCount), (v) => new THREE.Vector3(min.x, min.y, v));
   return group;
 }
-var widget_v3_default = {
+var visualization_default = {
   async render({ model, el }) {
     el.replaceChildren();
     const statusBanner = document.createElement("div");
@@ -38640,7 +38640,7 @@ var widget_v3_default = {
   }
 };
 export {
-  widget_v3_default as default
+  visualization_default as default
 };
 /*! Bundled license information:
 

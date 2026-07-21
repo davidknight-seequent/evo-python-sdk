@@ -62,6 +62,18 @@ from .urls import (
     get_viewer_url_from_reference,
     serialize_object_reference,
 )
+from .visualization import (
+    SUPPORTED_SCHEMAS,
+    TilesetBundle,
+    VisualizableObject,
+    download_tileset_bundle,
+    fetch_object_attributes,
+    fetch_object_colormaps,
+    fetch_tileset_json,
+    is_visualizable,
+    list_visualizable_objects,
+)
+from .visualization_widget import EvoObjectViewer
 
 if TYPE_CHECKING:
     from IPython.core.interactiveshell import InteractiveShell
@@ -77,6 +89,14 @@ __all__ = [
     "format_task_result_list",
     "format_task_result_with_target",
     "format_variogram",
+    "EvoObjectViewer",
+    "SUPPORTED_SCHEMAS",
+    "TilesetBundle",
+    "VisualizableObject",
+    "download_tileset_bundle",
+    "fetch_object_attributes",
+    "fetch_object_colormaps",
+    "fetch_tileset_json",
     "get_blocksync_base_url",
     "get_blocksync_block_model_url",
     "get_blocksync_block_model_url_from_environment",
@@ -90,6 +110,8 @@ __all__ = [
     "get_viewer_url_for_object",
     "get_viewer_url_for_objects",
     "get_viewer_url_from_reference",
+    "is_visualizable",
+    "list_visualizable_objects",
     "load_ipython_extension",
     "serialize_object_reference",
     "unload_ipython_extension",

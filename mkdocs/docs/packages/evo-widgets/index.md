@@ -35,6 +35,28 @@ viewer_url = get_viewer_url_for_object(grid)
 url = get_viewer_url_for_objects(manager, [grid, pointset, tensor_grid])
 ```
 
+## 3D Visualisation
+
+`EvoObjectViewer` renders visualisation-service objects inside a notebook. Tile content is
+downloaded through the authenticated SDK connector and supplied to the browser in memory, so no
+Evo credentials are exposed to the notebook front end.
+
+```python
+from evo.widgets import EvoObjectViewer, download_tileset_bundle, list_visualizable_objects
+
+objects = await list_visualizable_objects(manager)
+bundle = await download_tileset_bundle(manager, objects[0].object_id, name=objects[0].name)
+
+viewer = EvoObjectViewer(axis_labels=["Easting", "Northing", "Elevation"])
+viewer.add_bundle(bundle)
+viewer
+```
+
+Use `add_bundle()` to layer objects and `clear()` to reset the scene. The viewer supports
+pointsets, meshes, downhole data, and regular 2D grids served by Evo's visualisation service.
+When available,
+Evo attribute metadata and colormaps are included for attribute-driven colouring.
+
 ## Formatters
 
 Rich HTML representations for all typed geoscience objects:

@@ -1,0 +1,13 @@
+{
+  "private": true,
+  "scripts": {
+    "build:visualization": "esbuild src/evo/widgets/assets/visualization.js --bundle --format=esm --platform=browser --target=es2020 --outfile=src/evo/widgets/assets/visualization.bundle.js"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.10"
+  },
+  "dependencies": {
+    "3d-tiles-renderer": "0.3.36",
+    "three": "0.161.0"
+  }
+}

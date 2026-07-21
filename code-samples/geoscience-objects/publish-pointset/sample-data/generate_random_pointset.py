@@ -8,6 +8,7 @@ from pathlib import Path
 
 POINT_COUNT = 1_000
 RANDOM_SEED = 20_260_721
+CU_NULL_RATE = 0.8
 OUTPUT_PATH = Path(__file__).with_name("random_pointset.csv")
 ANOMALIES = [
     (445_280, 494_250, 2_960, 150, 80, 1.0),
@@ -68,14 +69,17 @@ def random_location(random_source: random.Random) -> tuple[float, float, float]:
 
 def main() -> None:
     random_source = random.Random(RANDOM_SEED)
+    null_source = random.Random(RANDOM_SEED + 1)
 
     with OUTPUT_PATH.open("w", newline="") as output_file:
-        writer = csv.writer(output_file)
+        writer = csv.writer(output_file, lineterminator="\n")
         writer.writerow(["X", "Y", "Z", "Lithology", "CU_pct", "AU_gpt", "DENSITY"])
 
         for _ in range(POINT_COUNT):
             x, y, z = random_location(random_source)
             pocket_strength = anomaly_strength(x, y, z)
+            cu_pct = round(0.1 + 8 * pocket_strength + random_source.lognormvariate(-1, 0.8), 2)
+            is_cu_missing = null_source.random() < CU_NULL_RATE
             is_density_missing = random_source.random() < 0.02
             writer.writerow(
                 [
@@ -83,7 +87,7 @@ def main() -> None:
                     round(y, 6),
                     round(z, 6),
                     lithology(pocket_strength, random_source),
-                    round(0.1 + 8 * pocket_strength + random_source.lognormvariate(-1, 0.8), 2),
+                    "" if is_cu_missing else cu_pct,
                     round(0.02 + 25 * pocket_strength**1.25 + random_source.lognormvariate(-1.8, 1), 2),
                     "" if is_density_missing else round(2.4 + 0.8 * pocket_strength + random_source.gauss(0, 0.12), 2),
                 ]
