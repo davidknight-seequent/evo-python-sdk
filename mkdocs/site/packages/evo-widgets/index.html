@@ -71,6 +71,10 @@
               <ul class="nav flex-column">
               </ul>
             </li>
+            <li class="nav-item" data-bs-level="2"><a href="#3d-visualisation" class="nav-link">3D Visualisation</a>
+              <ul class="nav flex-column">
+              </ul>
+            </li>
             <li class="nav-item" data-bs-level="2"><a href="#formatters" class="nav-link">Formatters</a>
               <ul class="nav flex-column">
               </ul>
@@ -111,6 +115,23 @@ viewer_url = get_viewer_url_for_object(grid)
 # View multiple objects together in the Viewer
 url = get_viewer_url_for_objects(manager, [grid, pointset, tensor_grid])
 </code></pre>
+<h2 id="3d-visualisation">3D Visualisation</h2>
+<p><code>EvoObjectViewer</code> renders visualisation-service objects inside a notebook. Tile content is
+downloaded through the authenticated SDK connector and supplied to the browser in memory, so no
+Evo credentials are exposed to the notebook front end.</p>
+<pre><code class="language-python">from evo.widgets import EvoObjectViewer, download_tileset_bundle, list_visualizable_objects
+
+objects = await list_visualizable_objects(manager)
+bundle = await download_tileset_bundle(manager, objects[0].object_id, name=objects[0].name)
+
+viewer = EvoObjectViewer(axis_labels=[&quot;Easting&quot;, &quot;Northing&quot;, &quot;Elevation&quot;])
+viewer.add_bundle(bundle)
+viewer
+</code></pre>
+<p>Use <code>add_bundle()</code> to layer objects and <code>clear()</code> to reset the scene. The viewer supports
+pointsets, meshes, downhole data, and regular 2D grids served by Evo's visualisation service.
+When available,
+Evo attribute metadata and colormaps are included for attribute-driven colouring.</p>
 <h2 id="formatters">Formatters</h2>
 <p>Rich HTML representations for all typed geoscience objects:</p>
 <ul>
