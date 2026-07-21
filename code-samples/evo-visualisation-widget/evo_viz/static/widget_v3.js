@@ -775,8 +775,11 @@ export default {
     const legendMax = document.createElement("span");
     legendScale.appendChild(legendMin);
     legendScale.appendChild(legendMax);
+    const legendCategories = document.createElement("div");
+    legendCategories.className = "evo-viz-legend-categories";
     legend.appendChild(legendBar);
     legend.appendChild(legendScale);
+    legend.appendChild(legendCategories);
 
     colorPanel.appendChild(attrRow);
     colorPanel.appendChild(legend);
@@ -1044,23 +1047,36 @@ export default {
       const cmap = meta.colormap || null;
       if (meta.kind === "category") {
         legend.style.display = "block";
-        legendBar.style.background =
-          cmap && cmap.kind === "category" && cmap.colors && cmap.colors.length
-            ? stopsCss(
-                cmap.colors.map((c, i) => ({
-                  position: cmap.colors.length > 1 ? i / (cmap.colors.length - 1) : 0,
-                  color: c,
-                }))
-              )
-            : stopsCss(DEFAULT_STOPS);
-        legendMin.textContent = "1";
-        legendMax.textContent = String(
-          (cmap && cmap.map && cmap.map.length) ||
-            (meta.categories && meta.categories.length) ||
-            0
-        );
+        legendBar.style.display = "none";
+        legendScale.style.display = "none";
+        legendCategories.style.display = "grid";
+        legendCategories.replaceChildren();
+        const labelColors = new Map();
+        if (cmap && cmap.kind === "category" && cmap.map && cmap.colors) {
+          for (let i = 0; i < cmap.map.length; i++) {
+            labelColors.set(String(cmap.map[i]), cmap.colors[i] || [1, 1, 1]);
+          }
+        }
+        for (const [index, label] of (meta.categories || []).entries()) {
+          const row = document.createElement("div");
+          row.className = "evo-viz-legend-category";
+          const swatch = document.createElement("span");
+          swatch.className = "evo-viz-legend-swatch";
+          const color = labelColors.get(String(label)) || sampleStops(
+            meta.categories.length > 1 ? index / (meta.categories.length - 1) : 0,
+            DEFAULT_STOPS
+          );
+          swatch.style.background = `rgb(${color.map((value) => Math.round(value * 255)).join(", ")})`;
+          const text = document.createElement("span");
+          text.textContent = label;
+          row.append(swatch, text);
+          legendCategories.appendChild(row);
+        }
         return;
       }
+      legendCategories.style.display = "none";
+      legendBar.style.display = "block";
+      legendScale.style.display = "flex";
       const useEvo = cmap && cmap.kind === "continuous" && cmap.stops && cmap.stops.length;
       const lo = useEvo && isFinite(cmap.min) ? cmap.min : meta.min;
       const hi = useEvo && isFinite(cmap.max) ? cmap.max : meta.max;

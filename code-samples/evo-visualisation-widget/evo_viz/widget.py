@@ -35,12 +35,12 @@ class EvoObjectViewer(anywidget.AnyWidget):
 
     # --- user-facing configuration ----------------------------------------
     axis_labels = traitlets.List(
-        traitlets.Unicode(), default_value=["Easting", "Northing", "Elevation"]
+        traitlets.Unicode(), default_value=["X", "Y", "Z"]
     ).tag(sync=True)
     show_axes = traitlets.Bool(True).tag(sync=True)
     tick_count = traitlets.Int(5).tag(sync=True)
-    background_color = traitlets.Unicode("#1e1e1e").tag(sync=True)
-    height = traitlets.Int(600).tag(sync=True)
+    background_color = traitlets.Unicode("#121212").tag(sync=True)
+    height = traitlets.Int(700).tag(sync=True)
     debug = traitlets.Bool(False).tag(sync=True)
     debug_max_lines = traitlets.Int(12).tag(sync=True)
 
