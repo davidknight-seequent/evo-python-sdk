@@ -82,8 +82,14 @@ You need:
 - **`anywidget`** — the cross-platform widget runtime.
 - A registered **Evo application** (`client_id` + `redirect_url`).
 
-The front-end libraries (three.js, 3d-tiles-renderer) load from a CDN at runtime, so there is
-nothing to `npm install`.
+The front-end libraries (three.js, 3d-tiles-renderer) are bundled into
+[`evo_viz/static/widget.bundle.js`](evo_viz/static/widget.bundle.js), so rendering does not
+require external widget-script sources in VS Code. To update those dependencies, run:
+
+```bash
+npm install --registry=https://registry.npmjs.org
+npm run build
+```
 
 ---
 
@@ -180,7 +186,8 @@ it.
 
 ## 5. How the front-end works
 
-[`evo_viz/static/widget.js`](evo_viz/static/widget.js) is a standard `anywidget` ESM module.
+[`evo_viz/static/widget.bundle.js`](evo_viz/static/widget.bundle.js) is the self-contained
+`anywidget` ESM module built from [`evo_viz/static/widget_v3.js`](evo_viz/static/widget_v3.js).
 
 ### 5.1 Serving in-memory bytes to the renderer
 

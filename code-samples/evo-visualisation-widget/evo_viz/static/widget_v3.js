@@ -4,69 +4,24 @@
 // numbered tick labels. Bytes for every tile come from Python via a single binary blob, so
 // the browser never needs an Evo token and there are no CORS issues.
 //
-// Rendering stack (loaded from a CDN so the widget stays dependency-free on the Python side):
+// Rendering stack. The build script bundles these dependencies into widget.bundle.js so
+// notebook front-ends never need to load scripts from an external CDN.
 //   * three           — scene graph + WebGL renderer
 //   * OrbitControls    — mouse/touch camera navigation
 //   * CSS2DRenderer    — DOM-based axis + tick labels that always face the camera
 //   * 3d-tiles-renderer — streams the tileset
+
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { CSS2DObject, CSS2DRenderer } from "three/addons/renderers/CSS2DRenderer.js";
+import { TilesRenderer } from "3d-tiles-renderer";
+
+const dependencies = { THREE, OrbitControls, CSS2DRenderer, CSS2DObject, TilesRenderer };
 //
 // NOTE ON VERSIONS: the exact hook used to feed in-memory bytes to 3d-tiles-renderer depends
 // on the library version. This module uses `tiles.manager.setURLModifier(...)` plus a scoped
 // `fetch` patch, which covers the 0.3.x line. If you upgrade, check the README for the
 // equivalent option.
-
-let __depsPromise = null;
-
-async function importFirst(urls) {
-  let lastError = null;
-  for (const url of urls) {
-    try {
-      return await import(url);
-    } catch (err) {
-      lastError = err;
-    }
-  }
-  throw lastError || new Error("module import failed");
-}
-
-function loadDependencies() {
-  if (__depsPromise) return __depsPromise;
-  __depsPromise = (async () => {
-    const three = await importFirst([
-      "https://cdn.jsdelivr.net/npm/three@0.161.0/+esm",
-      "https://esm.sh/three@0.161.0",
-    ]);
-    const controls = await importFirst([
-      "https://cdn.jsdelivr.net/npm/three@0.161.0/examples/jsm/controls/OrbitControls.js/+esm",
-      "https://esm.sh/three@0.161.0/examples/jsm/controls/OrbitControls.js",
-    ]);
-    const labels = await importFirst([
-      "https://cdn.jsdelivr.net/npm/three@0.161.0/examples/jsm/renderers/CSS2DRenderer.js/+esm",
-      "https://esm.sh/three@0.161.0/examples/jsm/renderers/CSS2DRenderer.js",
-    ]);
-    const tilesMod = await importFirst([
-      "https://cdn.jsdelivr.net/npm/3d-tiles-renderer@0.3.36/+esm",
-      "https://esm.sh/3d-tiles-renderer@0.3.36",
-    ]);
-
-    const TilesRenderer =
-      tilesMod.TilesRenderer ||
-      (tilesMod.default && tilesMod.default.TilesRenderer) ||
-      tilesMod.default;
-    if (!TilesRenderer) {
-      throw new Error("TilesRenderer export not found");
-    }
-
-    return {
-      THREE: three,
-      OrbitControls: controls.OrbitControls,
-      CSS2DRenderer: labels.CSS2DRenderer,
-      CSS2DObject: labels.CSS2DObject,
-      TilesRenderer,
-    };
-  })();
-  return __depsPromise;
-}
 
 // --- Global virtual-file registry -------------------------------------------
 // Maps a full virtual URL (e.g. https://evo.local/<id>/tileset.json) to a blob: URL.
@@ -721,7 +676,7 @@ export default {
 
     let deps;
     try {
-      deps = await loadDependencies();
+      deps = dependencies;
     } catch (err) {
       setStatus(`Evo Viz: failed to load JS dependencies \u2014 ${String(err)}`, true);
       return () => {};

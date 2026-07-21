@@ -26,7 +26,7 @@ _STATIC = pathlib.Path(__file__).parent / "static"
 class EvoObjectViewer(anywidget.AnyWidget):
     """A 3D viewer for Evo geoscience objects with axes and tick labels."""
 
-    _esm = _STATIC / "widget_v3.js"
+    _esm = _STATIC / "widget.bundle.js"
     _css = _STATIC / "widget.css"
 
     # --- data synced to the front-end -------------------------------------

@@ -5,7 +5,7 @@ description = "Code samples for the Seequent Evo Python SDK"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "anywidget=="0.11.0",
+    "anywidget==0.11.0",
     "evo-compute>=0.0.3",
     "evo-schemas>=2025.12.15",
     "evo-sdk>=0.2.2",
@@ -38,6 +38,9 @@ Source = "https://github.com/SeequentEvo/evo-python-sdk"
 Tracker = "https://github.com/SeequentEvo/evo-python-sdk/issues"
 Homepage = "https://www.seequent.com/"
 Documentation = "https://developer.seequent.com/"
+
+[tool.uv.sources]
+evo-sdk = { path = "..", editable = true }
 
 [tool.pytest.ini_options]
 pythonpath = ["tests"]
