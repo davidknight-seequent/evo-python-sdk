@@ -253,6 +253,7 @@ class TilesetBundle:
     name: str
     tileset: dict[str, Any]
     files: dict[str, bytes] = field(default_factory=dict)
+    attributes: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def virtual_root(self) -> str:
@@ -301,6 +302,88 @@ def _virtual_path_of(virtual_url: str) -> str:
     return parsed.path.lstrip("/")
 
 
+# ---------------------------------------------------------------------------
+# Attribute metadata (friendly names for the glb property tables)
+# ---------------------------------------------------------------------------
+#
+# The Visualisation service stores per-vertex attribute values inside each glb's
+# ``EXT_structural_metadata`` property tables, but keyed by an opaque property id of the
+# form ``attribute_<hash>``. That ``<hash>`` is the SHA-256 content hash of the attribute's
+# stored value array — i.e. the ``values.data`` field on the geoscience object attribute.
+# We fetch the object JSON, collect every attribute's ``{hash, name}`` here, and ship that
+# small mapping to the front-end so the colour dropdown can show real names (CU_pct, etc.).
+def _collect_attribute_metadata(
+    node: Any, out: list[dict[str, Any]], seen: set[str]
+) -> None:
+    """Recursively find attribute-like dicts and record their ``{hash, name, kind}``."""
+    if isinstance(node, dict):
+        name = node.get("name")
+        values = node.get("values")
+        data_hash = values.get("data") if isinstance(values, dict) else None
+        if isinstance(name, str) and isinstance(data_hash, str) and "key" in node:
+            if data_hash not in seen:
+                seen.add(data_hash)
+                out.append(
+                    {
+                        "hash": data_hash,
+                        "name": name,
+                        "kind": "category" if isinstance(node.get("table"), dict) else "continuous",
+                        "attribute_type": node.get("attribute_type"),
+                    }
+                )
+        for value in node.values():
+            _collect_attribute_metadata(value, out, seen)
+    elif isinstance(node, list):
+        for value in node:
+            _collect_attribute_metadata(value, out, seen)
+
+
+async def fetch_object_attributes(
+    manager: Any,
+    object_id: str,
+    *,
+    version: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return ``[{hash, name, kind, attribute_type}, ...]`` for an object's attributes.
+
+    Best-effort: returns an empty list if the object cannot be fetched or has no attributes,
+    so visualisation still works without attribute-driven colouring.
+    """
+    import json
+
+    connector = get_connector(manager)
+    env = get_environment(manager)
+
+    query_params = {"version": version} if version else None
+    try:
+        response = await connector.call_api(
+            method="GET",
+            resource_path="/geoscience-object/orgs/{org_id}/workspaces/{workspace_id}/objects/{object_id}",
+            path_params={
+                "org_id": env.org_id,
+                "workspace_id": env.workspace_id,
+                "object_id": str(object_id),
+            },
+            query_params=query_params,
+            header_params={"Accept": "application/json"},
+            response_types_map={"200": HTTPResponse},
+        )
+    except Exception:  # pragma: no cover - network/permission failures are non-fatal
+        return []
+
+    if response.status != HTTPStatus.OK:
+        return []
+
+    try:
+        payload = json.loads(response.data.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return []
+
+    attributes: list[dict[str, Any]] = []
+    _collect_attribute_metadata(payload.get("object", payload), attributes, set())
+    return attributes
+
+
 async def download_tileset_bundle(
     manager: Any,
     object_id: str,
@@ -339,6 +422,9 @@ async def download_tileset_bundle(
     virtual_root = f"{VIRTUAL_ORIGIN}/{object_id}/tileset.json"
 
     bundle = TilesetBundle(object_id=object_id, name=object_name, tileset=tileset)
+
+    # Friendly attribute names for the glb property tables (used by the colour dropdown).
+    bundle.attributes.extend(await fetch_object_attributes(manager, object_id, version=version))
 
     # Breadth-first walk over (real_tileset_url, virtual_tileset_url, tileset_dict).
     queue: list[tuple[str, str, dict[str, Any]]] = [(real_root, virtual_root, tileset)]

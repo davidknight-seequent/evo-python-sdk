@@ -44,6 +44,11 @@ class EvoObjectViewer(anywidget.AnyWidget):
     debug = traitlets.Bool(False).tag(sync=True)
     debug_max_lines = traitlets.Int(12).tag(sync=True)
 
+    # Attribute-driven colouring. ``color_attribute`` is the selected scalar vertex
+    # attribute (empty = original colours); ``colormap`` names the gradient to apply.
+    color_attribute = traitlets.Unicode("").tag(sync=True)
+    colormap = traitlets.Unicode("viridis").tag(sync=True)
+
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._bundles: list[TilesetBundle] = []
@@ -92,6 +97,7 @@ class EvoObjectViewer(anywidget.AnyWidget):
                     "name": str(bundle.name),
                     "root": f"{VIRTUAL_ORIGIN}/{root_path}",
                     "files": files_meta,
+                    "attributes": list(bundle.attributes),
                 }
             )
 

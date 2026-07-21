@@ -71,3 +71,61 @@
   z-index: 4;
   display: none;
 }
+
+/* Attribute-driven colouring controls, top-left. */
+.evo-viz-colors {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  min-width: 180px;
+  color: #eaeaea;
+  background: rgba(20, 20, 24, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  font: 500 12px/1.3 system-ui, sans-serif;
+  pointer-events: auto;
+}
+
+.evo-viz-colors-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: #b8b8b8;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.evo-viz-select {
+  padding: 4px 6px;
+  color: #f0f0f0;
+  background: #2a2a30;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  font: 500 12px/1.3 system-ui, sans-serif;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.evo-viz-legend {
+  display: none;
+}
+
+.evo-viz-legend-bar {
+  height: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 3px;
+}
+
+.evo-viz-legend-scale {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 3px;
+  color: #c8c8c8;
+  font: 400 10px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}

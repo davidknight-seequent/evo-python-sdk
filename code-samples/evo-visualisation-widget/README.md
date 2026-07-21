@@ -1,8 +1,9 @@
 # Building a Jupyter Widget for the Evo Visualisation API
 
 A complete, cross-platform recipe for rendering **Evo geoscience objects** inside a Jupyter
-notebook — surfaces, meshes, pointsets, downhole data and grids — displayed alongside a **3D axis
-frame with numbered tick labels**, just like the native EvoViewer app.
+notebook — surfaces, meshes, pointsets, downhole data and grids — recoloured by a chosen attribute
+and displayed alongside a **3D axis frame with numbered tick labels**, just like the native
+EvoViewer app.
 
 This folder is self-contained. Copy it into your Python repository, install the requirements, and
 adapt as needed.
@@ -225,7 +226,133 @@ Labels are `CSS2DObject`s — DOM elements that always face the camera — rende
 
 ---
 
-## 6. Configuration
+## 6. Attribute-driven colours
+
+Geoscience objects carry scalar attributes (grade, porosity, temperature, …), and Evo stores a
+*colormap* per attribute that maps those values to colours. This is core functionality: the widget
+lets a notebook user pick an attribute and recolours the object from its colormap — the same
+capability the native app's colour-map pipeline provides (see
+[`../COLORMAP-IMPLEMENTATION.md`](../COLORMAP-IMPLEMENTATION.md)).
+
+The work spans both sides of the pipeline. Colour definitions are fetched in **Python** — they
+live in Evo's colormap service, **not** in the downloaded tiles — while the recolouring happens in
+the **browser** as tiles load. Selection is per-object state: each object tracks its available
+attributes, available colormaps, the selected attribute + colormap, and its original colours so it
+can return to its source styling.
+
+### 6.1 Fetch the colormap (Python)
+
+Colour information lives in Evo's colormap service, so it is fetched server-side through the same
+authenticated connector the rest of the widget uses (`manager.get_connector()` /
+`manager.get_environment()`). Request the object's colormap associations, then the colormap
+detail, and map Evo's payload onto the `{ attribute, min, max, stops }` shape the renderer
+consumes:
+
+```python
+async def fetch_object_colormap(manager, object_id: str) -> dict | None:
+    connector = manager.get_connector()
+    env = manager.get_environment()
+    base = f"colormap/orgs/{env.org_id}/workspaces/{env.workspace_id}"
+
+    # 1. Which colormaps are associated with this object?
+    associations = await connector.call_api("GET", f"{base}/objects/{object_id}/associations")
+    if not associations:
+        return None
+    colormap_id = associations[0]["colormap_id"]
+
+    # 2. Full colormap detail: attribute name, value range, gradient stops.
+    detail = await connector.call_api("GET", f"{base}/colormaps/{colormap_id}")
+
+    # Field names follow the colormap-service schema (see ../COLORMAP-IMPLEMENTATION.md);
+    # adjust these keys to match the version your tenant returns.
+    return {
+        "attribute": detail["attribute_name"],
+        "min": detail["value_controls"]["min"],
+        "max": detail["value_controls"]["max"],
+        "stops": [
+            {"position": s["position"], "color": s["color"]}
+            for s in detail["gradient_controls"]
+        ],
+    }
+```
+
+The per-object attribute metadata an attribute picker needs must travel to the front-end in the
+bundle manifest, which today carries only object IDs, names, roots, and tile bytes — extend it to
+include each object's available attributes and colormaps.
+
+### 6.2 Recolour tile meshes (browser)
+
+As each glTF tile loads, read the selected custom scalar attribute from its vertex accessor — Evo
+attributes commonly use glTF names such as `_POROSITY` or `_TEMPERATURE` — normalize each value to
+the colormap range, interpolate the adjacent gradient stops, and write the result into a Three.js
+`color` attribute. The maths is small:
+
+```javascript
+// Interpolate a normalized scalar t ∈ [0, 1] across colormap gradient stops,
+// each { position, color: [r, g, b] } and sorted by position.
+function sampleColormap(t, stops) {
+  t = Math.min(1, Math.max(0, t));
+  for (let i = 1; i < stops.length; i++) {
+    const a = stops[i - 1], b = stops[i];
+    if (t <= b.position) {
+      const f = (t - a.position) / (b.position - a.position || 1);
+      return [
+        a.color[0] + (b.color[0] - a.color[0]) * f,
+        a.color[1] + (b.color[1] - a.color[1]) * f,
+        a.color[2] + (b.color[2] - a.color[2]) * f,
+      ];
+    }
+  }
+  return stops[stops.length - 1].color;
+}
+
+// Recolour one loaded tile mesh from a scalar attribute (e.g. "_POROSITY").
+function applyAttributeColours(mesh, attributeName, { min, max, stops }) {
+  const scalars = mesh.geometry.getAttribute(attributeName);
+  if (!scalars) return;
+  const range = max - min || 1;
+  const colors = new Float32Array(scalars.count * 3);
+  for (let i = 0; i < scalars.count; i++) {
+    const [r, g, b] = sampleColormap((scalars.getX(i) - min) / range, stops);
+    colors.set([r, g, b], i * 3);
+  }
+  mesh.geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  mesh.material.vertexColors = true;
+  mesh.material.needsUpdate = true;
+}
+```
+
+Because tiles stream in, run `applyAttributeColours` both when the selection changes and for each
+newly loaded tile.
+
+### 6.3 Drive the selection (traitlet)
+
+Sync the per-object selection from Python to the browser with a traitlet. Reassign the dict rather
+than mutating it in place, otherwise the trait will not sync:
+
+```python
+# EvoObjectViewer: per-object attribute + colormap selection.
+attribute_styles = Dict().tag(sync=True)
+# { object_id: {"attribute": "_POROSITY",
+#               "colormap": {"min": 0.0, "max": 0.35,
+#                            "stops": [{"position": 0.0, "color": [0.1, 0.1, 0.6]}, ...]}} }
+
+def set_attribute(self, object_id: str, attribute: str, colormap: dict) -> None:
+    styles = dict(self.attribute_styles)
+    styles[object_id] = {"attribute": attribute, "colormap": colormap}
+    self.attribute_styles = styles  # reassign so the trait syncs to the browser
+```
+
+On the browser side, observe `attribute_styles`, look up each object's currently loaded tiles, and
+call `applyAttributeColours` for every mesh (re-running it as new tiles stream in). Build a colour
+legend from the same gradient stops and value controls.
+
+Block models and Central objects remain outside this widget's scope. Their attribute and colour
+pipelines use different services and rendering paths.
+
+---
+
+## 7. Configuration
 
 `EvoObjectViewer` exposes these traitlets (all live-updatable from Python):
 
@@ -244,22 +371,21 @@ viewer.background_color = "#ffffff"
 
 ---
 
-## 7. Extending the widget
+## 8. Extending the widget
 
 Natural next steps, all additive:
 
-- **Object picking / attributes** — raycast against `tiles.group` and surface feature metadata.
+- **Object picking** — raycast against `tiles.group` and surface per-feature metadata on
+  hover/click.
 - **Opacity & visibility per object** — add traits and toggle `tiles.group.visible` / material
   opacity (the app keeps per-object opacity in `refreshRendererRootTile`).
-- **Colour maps** — apply attribute-driven colouring on load (see
-  [`../COLORMAP-IMPLEMENTATION.md`](../COLORMAP-IMPLEMENTATION.md)).
 - **Scale bar** — port the screen-space scale bar (see [`../scale-bar.md`](../scale-bar.md)).
 - **Streaming instead of eager download** — for very large tilesets, replace the "download
   everything" step with a small authenticated proxy so the renderer streams tiles on demand.
 
 ---
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
@@ -273,7 +399,7 @@ Natural next steps, all additive:
 
 ---
 
-## 9. Reference: the app's data flow
+## 10. Reference: the app's data flow
 
 For the authoritative Swift implementation this guide is modelled on, see:
 
