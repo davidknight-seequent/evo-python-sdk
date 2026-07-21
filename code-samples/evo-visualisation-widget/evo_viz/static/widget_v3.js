@@ -224,6 +224,46 @@ function colormapCss(name) {
   return `linear-gradient(to right, ${parts.join(", ")})`;
 }
 
+// --- Evo colormap gradients (fetched per attribute from the colormap service) --------
+// Each stop is { position: 0..1, color: [r, g, b] in 0..1 }, sorted by position.
+function sampleStops(t, stops) {
+  t = Math.max(0, Math.min(1, isFinite(t) ? t : 0));
+  if (!stops || !stops.length) return [t, t, t];
+  if (t <= stops[0].position) return stops[0].color;
+  for (let i = 1; i < stops.length; i++) {
+    const a = stops[i - 1];
+    const b = stops[i];
+    if (t <= b.position) {
+      const f = (t - a.position) / (b.position - a.position || 1);
+      return [
+        a.color[0] + (b.color[0] - a.color[0]) * f,
+        a.color[1] + (b.color[1] - a.color[1]) * f,
+        a.color[2] + (b.color[2] - a.color[2]) * f,
+      ];
+    }
+  }
+  return stops[stops.length - 1].color;
+}
+
+// A CSS linear-gradient string built from Evo colormap stops.
+function stopsCss(stops) {
+  if (!stops || !stops.length) return "linear-gradient(to right, #000, #fff)";
+  const parts = stops.map((s) => {
+    const r = Math.round(s.color[0] * 255);
+    const g = Math.round(s.color[1] * 255);
+    const b = Math.round(s.color[2] * 255);
+    return `rgb(${r},${g},${b}) ${(s.position * 100).toFixed(1)}%`;
+  });
+  return `linear-gradient(to right, ${parts.join(", ")})`;
+}
+
+// Fallback gradient used when an attribute has no Evo colormap association: viridis,
+// expressed as {position, color:[r, g, b] 0..1} stops.
+const DEFAULT_STOPS = COLORMAPS.viridis.map((s) => ({
+  position: s[0],
+  color: [s[1] / 255, s[2] / 255, s[3] / 255],
+}));
+
 // User-facing attribute name: drop the glTF custom-attribute underscore prefix.
 function displayAttrName(key) {
   return key.replace(/^_+/, "");
@@ -417,7 +457,13 @@ function decodeGlbAttributes(bytes, nameByHash) {
         const accessorIndex = tableFeatureAccessor[ti];
         const indices = accessorIndex != null ? readAccessorScalar(gltf, bin, accessorIndex) : null;
         if (categories && indices) {
-          attrs.push({ name: meta.name, kind: "category", indices, categories });
+          attrs.push({
+            name: meta.name,
+            kind: "category",
+            indices,
+            categories,
+            colormap: meta.colormap || null,
+          });
         }
         continue;
       }
@@ -446,7 +492,7 @@ function decodeGlbAttributes(bytes, nameByHash) {
         if (v < min) min = v;
         if (v > max) max = v;
       }
-      attrs.push({ name: meta.name, kind: "continuous", values, min, max });
+      attrs.push({ name: meta.name, kind: "continuous", values, min, max, colormap: meta.colormap || null });
     }
   }
 
@@ -718,19 +764,6 @@ export default {
     attrSelect.className = "evo-viz-select";
     attrRow.appendChild(attrSelect);
 
-    const cmapRow = document.createElement("label");
-    cmapRow.className = "evo-viz-colors-row";
-    cmapRow.append("Colour map");
-    const cmapSelect = document.createElement("select");
-    cmapSelect.className = "evo-viz-select";
-    for (const name of COLORMAP_NAMES) {
-      const opt = document.createElement("option");
-      opt.value = name;
-      opt.textContent = name;
-      cmapSelect.appendChild(opt);
-    }
-    cmapRow.appendChild(cmapSelect);
-
     const legend = document.createElement("div");
     legend.className = "evo-viz-legend";
     legend.style.display = "none";
@@ -746,7 +779,6 @@ export default {
     legend.appendChild(legendScale);
 
     colorPanel.appendChild(attrRow);
-    colorPanel.appendChild(cmapRow);
     colorPanel.appendChild(legend);
     container.appendChild(colorPanel);
 
@@ -859,7 +891,6 @@ export default {
     }
 
     // --- Attribute-driven colouring ------------------------------------------------
-    cmapSelect.value = state.colormap;
 
     // Rebuild the attribute dropdown from the scalars discovered so far.
     function rebuildAttributeOptions() {
@@ -916,12 +947,14 @@ export default {
     // Apply the current attribute + colour map to every loaded node (or restore originals).
     function applyColouring() {
       const name = state.colorAttribute;
-      const cmap = state.colormap;
       const meta = name ? state.attributes.get(name) : null;
       // No-data points (Evo's inf / 1.8e308 sentinels) blend into the background so they
       // don't show up as stray light-coloured dots at the ends of traces.
       const bg = scene.background && scene.background.isColor ? scene.background : null;
       const NO_DATA = bg ? [bg.r, bg.g, bg.b] : [0.07, 0.07, 0.07];
+
+      // Prefer the attribute's Evo colormap; fall back to a default gradient / palette.
+      const cmap = meta && meta.colormap ? meta.colormap : null;
 
       for (const entry of state.loadedNodes) {
         const geometry = entry.geometry;
@@ -933,21 +966,41 @@ export default {
           const colors = new Float32Array(count * 3);
           if (data.kind === "category") {
             const idx = data.indices;
-            const n = (data.categories && data.categories.length) || 1;
+            const cats = data.categories || [];
+            const n = cats.length || 1;
+            // Build a label -> colour lookup from the Evo category colormap when present.
+            let labelColor = null;
+            if (cmap && cmap.kind === "category" && cmap.map && cmap.colors) {
+              labelColor = new Map();
+              for (let k = 0; k < cmap.map.length; k++) {
+                labelColor.set(String(cmap.map[k]), cmap.colors[k] || [1, 1, 1]);
+              }
+            }
             for (let i = 0; i < count; i++) {
               const c = i < idx.length ? idx[i] : -1;
-              const rgb = c < 0 ? NO_DATA : sampleColormap(cmap, n > 1 ? c / (n - 1) : 0);
+              let rgb;
+              if (c < 0) {
+                rgb = NO_DATA;
+              } else if (labelColor) {
+                rgb = labelColor.get(String(cats[c])) || NO_DATA;
+              } else {
+                rgb = sampleStops(n > 1 ? c / (n - 1) : 0, DEFAULT_STOPS);
+              }
               colors[i * 3] = rgb[0];
               colors[i * 3 + 1] = rgb[1];
               colors[i * 3 + 2] = rgb[2];
             }
           } else {
             const src = data.values;
-            const lo = meta.min;
-            const span = meta.max - meta.min || 1;
+            // Use the Evo colormap's range/stops when available, else the decoded range.
+            const useEvo = cmap && cmap.kind === "continuous" && cmap.stops && cmap.stops.length;
+            const stops = useEvo ? cmap.stops : DEFAULT_STOPS;
+            const lo = useEvo && isFinite(cmap.min) ? cmap.min : meta.min;
+            const hi = useEvo && isFinite(cmap.max) ? cmap.max : meta.max;
+            const span = hi - lo || 1;
             for (let i = 0; i < count; i++) {
               const v = i < src.length ? src[i] : NaN;
-              const rgb = v !== v ? NO_DATA : sampleColormap(cmap, (v - lo) / span);
+              const rgb = v !== v ? NO_DATA : sampleStops((v - lo) / span, stops);
               colors[i * 3] = rgb[0];
               colors[i * 3 + 1] = rgb[1];
               colors[i * 3 + 2] = rgb[2];
@@ -988,35 +1041,43 @@ export default {
         legend.style.display = "none";
         return;
       }
+      const cmap = meta.colormap || null;
       if (meta.kind === "category") {
         legend.style.display = "block";
-        legendBar.style.background = colormapCss(state.colormap);
+        legendBar.style.background =
+          cmap && cmap.kind === "category" && cmap.colors && cmap.colors.length
+            ? stopsCss(
+                cmap.colors.map((c, i) => ({
+                  position: cmap.colors.length > 1 ? i / (cmap.colors.length - 1) : 0,
+                  color: c,
+                }))
+              )
+            : stopsCss(DEFAULT_STOPS);
         legendMin.textContent = "1";
-        legendMax.textContent = String((meta.categories && meta.categories.length) || 0);
+        legendMax.textContent = String(
+          (cmap && cmap.map && cmap.map.length) ||
+            (meta.categories && meta.categories.length) ||
+            0
+        );
         return;
       }
-      if (!isFinite(meta.min) || !isFinite(meta.max)) {
+      const useEvo = cmap && cmap.kind === "continuous" && cmap.stops && cmap.stops.length;
+      const lo = useEvo && isFinite(cmap.min) ? cmap.min : meta.min;
+      const hi = useEvo && isFinite(cmap.max) ? cmap.max : meta.max;
+      if (!isFinite(lo) || !isFinite(hi)) {
         legend.style.display = "none";
         return;
       }
       legend.style.display = "block";
-      legendBar.style.background = colormapCss(state.colormap);
-      legendMin.textContent = formatTick(meta.min);
-      legendMax.textContent = formatTick(meta.max);
+      legendBar.style.background = useEvo ? stopsCss(cmap.stops) : stopsCss(DEFAULT_STOPS);
+      legendMin.textContent = formatTick(lo);
+      legendMax.textContent = formatTick(hi);
     }
 
     attrSelect.addEventListener("change", () => {
       state.colorAttribute = attrSelect.value;
       if (model.get("color_attribute") !== attrSelect.value) {
         model.set("color_attribute", attrSelect.value);
-        if (model.save_changes) model.save_changes();
-      }
-      applyColouring();
-    });
-    cmapSelect.addEventListener("change", () => {
-      state.colormap = cmapSelect.value;
-      if (model.get("colormap") !== cmapSelect.value) {
-        model.set("colormap", cmapSelect.value);
         if (model.save_changes) model.save_changes();
       }
       applyColouring();
@@ -1129,7 +1190,12 @@ export default {
         // Friendly-name lookup for this object's glb property tables (hash -> {name, kind}).
         const nameByHash = {};
         for (const a of obj.attributes || []) {
-          if (a && a.hash) nameByHash[a.hash] = { name: a.name, kind: a.kind || "continuous" };
+          if (a && a.hash)
+            nameByHash[a.hash] = {
+              name: a.name,
+              kind: a.kind || "continuous",
+              colormap: a.colormap || null,
+            };
         }
         const objGlbBytes = [];
 
@@ -1208,9 +1274,10 @@ export default {
             for (const at of decoded.attrs) {
               let meta = state.attributes.get(at.name);
               if (!meta) {
-                meta = { kind: at.kind, min: Infinity, max: -Infinity, categories: null };
+                meta = { kind: at.kind, min: Infinity, max: -Infinity, categories: null, colormap: null };
                 state.attributes.set(at.name, meta);
               }
+              if (at.colormap && !meta.colormap) meta.colormap = at.colormap;
               if (at.kind === "continuous") {
                 if (at.min < meta.min) meta.min = at.min;
                 if (at.max > meta.max) meta.max = at.max;
@@ -1480,19 +1547,12 @@ export default {
       if (state.attributes.has(v) || v === "") attrSelect.value = v;
       applyColouring();
     };
-    const onColormap = () => {
-      const v = model.get("colormap") || "viridis";
-      state.colormap = v;
-      cmapSelect.value = v;
-      applyColouring();
-    };
     model.on("change:_blob", onData);
     model.on("change:_manifest", onData);
     model.on("change:background_color", onBg);
     model.on("change:debug", onDebug);
     model.on("change:debug_max_lines", onDebug);
     model.on("change:color_attribute", onColorAttr);
-    model.on("change:colormap", onColormap);
 
     // Initial render + a delayed retry to avoid missing early model state hydration.
     loadData();
@@ -1511,7 +1571,6 @@ export default {
       model.off("change:debug", onDebug);
       model.off("change:debug_max_lines", onDebug);
       model.off("change:color_attribute", onColorAttr);
-      model.off("change:colormap", onColormap);
       if (g.__evoVizActiveStats === state.stats) {
         g.__evoVizActiveStats = null;
       }

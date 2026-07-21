@@ -327,6 +327,7 @@ def _collect_attribute_metadata(
                     {
                         "hash": data_hash,
                         "name": name,
+                        "key": str(node.get("key")),
                         "kind": "category" if isinstance(node.get("table"), dict) else "continuous",
                         "attribute_type": node.get("attribute_type"),
                     }
@@ -384,6 +385,122 @@ async def fetch_object_attributes(
     return attributes
 
 
+def _normalise_rgb(color: Any) -> list[float] | None:
+    """Convert an RGB(A) colour (0-255 ints) to normalized [r, g, b] floats in 0..1."""
+    if not isinstance(color, (list, tuple)) or len(color) < 3:
+        return None
+    try:
+        return [max(0.0, min(1.0, float(color[i]) / 255.0)) for i in range(3)]
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_colormap_detail(detail: dict[str, Any]) -> dict[str, Any] | None:
+    """Map a colormap-service payload onto the shape the renderer consumes.
+
+    Continuous -> {kind, min, max, stops:[{position, color}]}; the value range comes from
+    ``attribute_controls`` and the gradient from ``gradient_controls`` + ``colors``.
+    Category   -> {kind, map:[labels], colors:[[r,g,b]]}.
+    """
+    colors = [c for c in (_normalise_rgb(c) for c in detail.get("colors", []) or []) if c]
+
+    gradient = detail.get("gradient_controls") or []
+    attribute_controls = detail.get("attribute_controls") or []
+    category_map = detail.get("map")
+
+    # Category colormap: a label list paired with per-category colours.
+    if category_map is not None and not gradient:
+        labels = [str(m) for m in category_map]
+        n = min(len(labels), len(colors))
+        if not n:
+            return None
+        return {"kind": "category", "map": labels[:n], "colors": colors[:n]}
+
+    # Continuous colormap.
+    if colors and attribute_controls:
+        if len(gradient) != len(colors):
+            # Synthesize evenly spaced positions if the service omitted them.
+            n = len(colors)
+            gradient = [i / (n - 1) if n > 1 else 0.0 for i in range(n)]
+        stops = [
+            {"position": float(pos), "color": col}
+            for pos, col in zip(gradient, colors)
+        ]
+        try:
+            vmin = float(attribute_controls[0])
+            vmax = float(attribute_controls[-1])
+        except (TypeError, ValueError):
+            return None
+        return {"kind": "continuous", "min": vmin, "max": vmax, "stops": stops}
+
+    return None
+
+
+async def fetch_object_colormaps(
+    manager: Any,
+    object_id: str,
+) -> dict[str, dict[str, Any]]:
+    """Return ``{attribute_key: colormap_dict}`` for an object's associated colormaps.
+
+    Colour definitions live in Evo's colormap service (not in the tiles), so they are fetched
+    here through the authenticated connector. Best-effort: any failure yields ``{}`` so
+    visualisation still works, falling back to a default gradient in the browser.
+    """
+    import json
+
+    connector = get_connector(manager)
+    env = get_environment(manager)
+    base = "/colormap/orgs/{org_id}/workspaces/{workspace_id}"
+    path_params = {"org_id": env.org_id, "workspace_id": env.workspace_id}
+
+    try:
+        response = await connector.call_api(
+            method="GET",
+            resource_path=base + "/objects/{object_id}/associations",
+            path_params={**path_params, "object_id": str(object_id)},
+            header_params={"Accept": "application/json"},
+            response_types_map={"200": HTTPResponse},
+        )
+    except Exception:  # pragma: no cover - non-fatal
+        return {}
+    if response.status != HTTPStatus.OK:
+        return {}
+
+    try:
+        payload = json.loads(response.data.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return {}
+
+    associations = payload.get("associations") or payload.get("items") or []
+    result: dict[str, dict[str, Any]] = {}
+    for assoc in associations:
+        attribute_id = assoc.get("attribute_id") or assoc.get("attribute")
+        colormap_id = assoc.get("colormap_id") or assoc.get("colormap")
+        if not attribute_id or not colormap_id or str(attribute_id) in result:
+            continue
+        try:
+            detail_resp = await connector.call_api(
+                method="GET",
+                resource_path=base + "/colormaps/{colormap_id}",
+                path_params={**path_params, "colormap_id": str(colormap_id)},
+                header_params={"Accept": "application/json"},
+                response_types_map={"200": HTTPResponse},
+            )
+        except Exception:  # pragma: no cover - non-fatal
+            continue
+        if detail_resp.status != HTTPStatus.OK:
+            continue
+        try:
+            detail = json.loads(detail_resp.data.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError):
+            continue
+        parsed = _parse_colormap_detail(detail)
+        if parsed:
+            result[str(attribute_id)] = parsed
+
+    return result
+
+
 async def download_tileset_bundle(
     manager: Any,
     object_id: str,
@@ -423,8 +540,15 @@ async def download_tileset_bundle(
 
     bundle = TilesetBundle(object_id=object_id, name=object_name, tileset=tileset)
 
-    # Friendly attribute names for the glb property tables (used by the colour dropdown).
-    bundle.attributes.extend(await fetch_object_attributes(manager, object_id, version=version))
+    # Friendly attribute names for the glb property tables (used by the colour dropdown), each
+    # paired with its Evo colormap (fetched from the colormap service, keyed by attribute key).
+    object_attributes = await fetch_object_attributes(manager, object_id, version=version)
+    colormaps = await fetch_object_colormaps(manager, object_id)
+    for attr in object_attributes:
+        colormap = colormaps.get(str(attr.get("key")))
+        if colormap:
+            attr["colormap"] = colormap
+    bundle.attributes.extend(object_attributes)
 
     # Breadth-first walk over (real_tileset_url, virtual_tileset_url, tileset_dict).
     queue: list[tuple[str, str, dict[str, Any]]] = [(real_root, virtual_root, tileset)]

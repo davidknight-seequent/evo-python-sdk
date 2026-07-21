@@ -282,10 +282,43 @@ include each object's available attributes and colormaps.
 
 ### 6.2 Recolour tile meshes (browser)
 
-As each glTF tile loads, read the selected custom scalar attribute from its vertex accessor — Evo
-attributes commonly use glTF names such as `_POROSITY` or `_TEMPERATURE` — normalize each value to
-the colormap range, interpolate the adjacent gradient stops, and write the result into a Three.js
-`color` attribute. The maths is small:
+Once a tile has loaded, colouring it is a two-part job: **find the attribute's values**, then map
+each value through the gradient.
+
+#### Finding the attribute values
+
+Evo does not always store an attribute as a plain per-vertex accessor. Match the native app's
+resolution order (`applySelectedEvoColormapToLoadedTiles` in
+[`ContentViewModel+EvoObjectLoading.swift`](../../EvoViewer/EvoViewer/ViewModels/ContentViewModel+EvoObjectLoading.swift)),
+trying each source until one yields values:
+
+1. **`EXT_structural_metadata` property table** — the common case for Evo meshes. The value lives
+   in a per-*feature* property table, not on the vertices. Read the glTF JSON, find the
+   `attributes` class, match the requested property by its display `name` (case-insensitive),
+   then decode the typed array from the referenced `bufferView` in the binary chunk. These values
+   are **per feature**, so they must be remapped to vertices (see below).
+2. **Named vertex accessor** — the simple case, a custom `_ATTRIBUTE` accessor such as `_POROSITY`
+   or `_TEMPERATURE` read straight off the geometry.
+3. **First available scalar attribute** — a last-resort fallback when nothing matched by name, so
+   the object still recolours rather than staying flat.
+
+Attribute names are fuzzy-matched: for each requested name the app also tries the
+spaces-to-underscores form, upper- and lower-case, and each of those with a leading `_`
+(`Porosity` → `Porosity`, `_Porosity`, `POROSITY`, `_POROSITY`, …). The list of names to try comes
+from the colormap's `attributeName`, then the colormap's display name, then the object's known
+attribute names.
+
+**Per-feature → per-vertex remapping.** When the values came from a property table (source 1),
+read the `_FEATURE_ID_0` vertex attribute: each vertex's feature ID indexes into the table, so the
+per-vertex value is `tableValues[featureID[i]]`. Skip the remap when the feature IDs are the
+identity mapping, or when counts mismatch / IDs fall out of range / IDs are non-unique — in those
+cases the table already lines up with vertices (or is unusable).
+
+#### Applying the colour
+
+With a per-vertex value array in hand, normalize each value to the colormap range, interpolate the
+adjacent gradient stops, and write the result into a Three.js `color` attribute. The maths is
+small:
 
 ```javascript
 // Interpolate a normalized scalar t ∈ [0, 1] across colormap gradient stops,
@@ -306,14 +339,12 @@ function sampleColormap(t, stops) {
   return stops[stops.length - 1].color;
 }
 
-// Recolour one loaded tile mesh from a scalar attribute (e.g. "_POROSITY").
-function applyAttributeColours(mesh, attributeName, { min, max, stops }) {
-  const scalars = mesh.geometry.getAttribute(attributeName);
-  if (!scalars) return;
+// Recolour one loaded tile mesh from a per-vertex scalar value array.
+function applyAttributeColours(mesh, values, { min, max, stops }) {
   const range = max - min || 1;
-  const colors = new Float32Array(scalars.count * 3);
-  for (let i = 0; i < scalars.count; i++) {
-    const [r, g, b] = sampleColormap((scalars.getX(i) - min) / range, stops);
+  const colors = new Float32Array(values.length * 3);
+  for (let i = 0; i < values.length; i++) {
+    const [r, g, b] = sampleColormap((values[i] - min) / range, stops);
     colors.set([r, g, b], i * 3);
   }
   mesh.geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
@@ -322,8 +353,14 @@ function applyAttributeColours(mesh, attributeName, { min, max, stops }) {
 }
 ```
 
-Because tiles stream in, run `applyAttributeColours` both when the selection changes and for each
-newly loaded tile.
+`values` here is the resolved per-vertex array from the previous step — for source 2 that is just
+`mesh.geometry.getAttribute("_POROSITY")` unpacked; for source 1 it is the property-table array
+after `_FEATURE_ID_0` remapping. three.js surfaces `EXT_structural_metadata` and `_FEATURE_ID_0`
+through the `GLTFLoader` metadata/mesh-features plugins, so wire those in when reading the property
+table in the browser.
+
+Because tiles stream in, run the recolour both when the selection changes and for each newly
+loaded tile.
 
 ### 6.3 Drive the selection (traitlet)
 
