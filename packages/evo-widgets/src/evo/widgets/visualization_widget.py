@@ -32,6 +32,7 @@ class EvoObjectViewer(anywidget.AnyWidget):
     debug_max_lines = traitlets.Int(12).tag(sync=True)
     color_attribute = traitlets.Unicode("").tag(sync=True)
     colormap = traitlets.Unicode("viridis").tag(sync=True)
+    _debug_info = traitlets.Unicode("").tag(sync=True)
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -69,6 +70,7 @@ class EvoObjectViewer(anywidget.AnyWidget):
                     "root": f"{VIRTUAL_ORIGIN}/{root_path}",
                     "files": files,
                     "attributes": list(bundle.attributes),
+                    "collections": list(bundle.collections),
                 }
             )
         self._blob = b"".join(chunks)

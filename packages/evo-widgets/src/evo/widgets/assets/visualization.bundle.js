@@ -37517,6 +37517,46 @@ var META_COMPONENT_ARRAYS = {
 function isNoData(v) {
   return !isFinite(v) || Math.abs(v) >= 1e308;
 }
+function stripSentinelSpikes(values) {
+  const finite = [];
+  for (let i = 0; i < values.length; i++) {
+    if (values[i] === values[i]) finite.push(values[i]);
+  }
+  if (finite.length < 8) return;
+  finite.sort((a, b) => a - b);
+  const sentinels = [];
+  let lo = 0;
+  let hi = finite.length - 1;
+  for (let pass = 0; pass < 4 && hi - lo > 3; pass++) {
+    const min = finite[lo];
+    const max = finite[hi];
+    if (max - min <= 0) break;
+    let lo2 = lo;
+    while (lo2 <= hi && finite[lo2] === min) lo2++;
+    let hi2 = hi;
+    while (hi2 >= lo && finite[hi2] === max) hi2--;
+    const lowGap = lo2 <= hi ? finite[lo2] - min : 0;
+    const highGap = hi2 >= lo ? max - finite[hi2] : 0;
+    const restSpanLow = lo2 <= hi ? max - finite[lo2] : 0;
+    const restSpanHigh = hi2 >= lo ? finite[hi2] - min : 0;
+    if (lowGap > 0 && lowGap >= 20 * Math.max(restSpanLow, 1e-12)) {
+      sentinels.push(min);
+      lo = lo2;
+      continue;
+    }
+    if (highGap > 0 && highGap >= 20 * Math.max(restSpanHigh, 1e-12)) {
+      sentinels.push(max);
+      hi = hi2;
+      continue;
+    }
+    break;
+  }
+  if (!sentinels.length) return;
+  const drop = new Set(sentinels);
+  for (let i = 0; i < values.length; i++) {
+    if (drop.has(values[i])) values[i] = NaN;
+  }
+}
 function parseGlb(bytes) {
   if (!bytes || bytes.length < 12) return null;
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -37637,6 +37677,26 @@ function decodeGlbAttributes(bytes, nameByHash) {
       }
     }
   }
+  let instanceCount = 0;
+  const tableInstanceFeature = {};
+  for (const node of gltf.nodes || []) {
+    const nodeExt = node.extensions || {};
+    const instancing = nodeExt.EXT_mesh_gpu_instancing;
+    const features = nodeExt.EXT_instance_features;
+    if (!instancing || !features || !Array.isArray(features.featureIds)) continue;
+    const instAttrs = instancing.attributes || {};
+    for (const fid of features.featureIds) {
+      if (fid.propertyTable == null || fid.propertyTable in tableInstanceFeature) continue;
+      if (fid.featureCount) instanceCount = fid.featureCount;
+      let rows = null;
+      if (fid.attribute != null) {
+        const accessorIndex = instAttrs["_FEATURE_ID_" + fid.attribute];
+        if (accessorIndex != null) rows = readAccessorScalar(gltf, bin, accessorIndex);
+      }
+      tableInstanceFeature[fid.propertyTable] = { rows, nullFeatureId: fid.nullFeatureId };
+    }
+    break;
+  }
   const attrs = [];
   const tables = ext.propertyTables;
   for (let ti = 0; ti < tables.length; ti++) {
@@ -37644,6 +37704,7 @@ function decodeGlbAttributes(bytes, nameByHash) {
     const cls = classes[table.class] || {};
     const clsProps = cls.properties || {};
     const count = table.count;
+    const instFeat = tableInstanceFeature[ti];
     if (typeof table.class === "string" && table.class.startsWith("attribute_")) {
       const meta = nameByHash[table.class.slice("attribute_".length)];
       if (meta && meta.kind === "category") {
@@ -37655,16 +37716,34 @@ function decodeGlbAttributes(bytes, nameByHash) {
           count,
           valueDef.stringOffsetType
         );
-        const accessorIndex = tableFeatureAccessor[ti];
-        const indices = accessorIndex != null ? readAccessorScalar(gltf, bin, accessorIndex) : null;
-        if (categories && indices) {
-          attrs.push({
-            name: meta.name,
-            kind: "category",
-            indices,
-            categories,
-            colormap: meta.colormap || null
-          });
+        if (categories) {
+          if (instFeat) {
+            const indices = new Array(instanceCount);
+            for (let i = 0; i < instanceCount; i++) {
+              const row = instFeat.rows ? instFeat.rows[i] : i;
+              indices[i] = row === instFeat.nullFeatureId || row == null || row < 0 ? -1 : row;
+            }
+            attrs.push({
+              name: meta.name,
+              kind: "category",
+              indices,
+              categories,
+              instanced: true,
+              colormap: meta.colormap || null
+            });
+          } else {
+            const accessorIndex = tableFeatureAccessor[ti];
+            const indices = accessorIndex != null ? readAccessorScalar(gltf, bin, accessorIndex) : null;
+            if (indices) {
+              attrs.push({
+                name: meta.name,
+                kind: "category",
+                indices,
+                categories,
+                colormap: meta.colormap || null
+              });
+            }
+          }
         }
         continue;
       }
@@ -37682,23 +37761,34 @@ function decodeGlbAttributes(bytes, nameByHash) {
         count
       );
       if (!column) continue;
-      const values = new Float32Array(count);
+      const outCount = instFeat ? instanceCount : count;
+      const values = new Float32Array(outCount);
+      for (let i = 0; i < outCount; i++) {
+        const row = instFeat ? instFeat.rows ? instFeat.rows[i] : i : i;
+        const v = instFeat && (row === instFeat.nullFeatureId || row == null || row < 0 || row >= column.length) ? NaN : column[row];
+        values[i] = isNoData(v) ? NaN : v;
+      }
+      stripSentinelSpikes(values);
       let min = Infinity;
       let max = -Infinity;
-      for (let i = 0; i < count; i++) {
-        const v = column[i];
-        if (isNoData(v)) {
-          values[i] = NaN;
-          continue;
-        }
-        values[i] = v;
+      for (let i = 0; i < outCount; i++) {
+        const v = values[i];
+        if (v !== v) continue;
         if (v < min) min = v;
         if (v > max) max = v;
       }
-      attrs.push({ name: meta.name, kind: "continuous", values, min, max, colormap: meta.colormap || null });
+      attrs.push({
+        name: meta.name,
+        kind: "continuous",
+        values,
+        min,
+        max,
+        instanced: !!instFeat,
+        colormap: meta.colormap || null
+      });
     }
   }
-  return { pointCount, attrs };
+  return { pointCount, instanceCount, attrs };
 }
 function isFeatureIdAttr(key) {
   const k = key.toLowerCase().replace(/^_+/, "");
@@ -37808,12 +37898,17 @@ function stripGzSuffix(uri) {
 }
 function normalizeTileUris(tile) {
   if (!tile || typeof tile !== "object") return;
-  if (tile.content && tile.content.uri) {
-    tile.content.uri = stripGzSuffix(tile.content.uri);
+  if (tile.content) {
+    for (const key of ["uri", "url"]) {
+      if (tile.content[key]) tile.content[key] = stripGzSuffix(tile.content[key]);
+    }
   }
   if (Array.isArray(tile.contents)) {
     for (const c of tile.contents) {
-      if (c && c.uri) c.uri = stripGzSuffix(c.uri);
+      if (!c) continue;
+      for (const key of ["uri", "url"]) {
+        if (c[key]) c[key] = stripGzSuffix(c[key]);
+      }
     }
   }
   if (Array.isArray(tile.children)) {
@@ -37907,6 +38002,13 @@ var visualization_default = {
     const colorPanel = document.createElement("div");
     colorPanel.className = "evo-viz-colors";
     colorPanel.style.display = "none";
+    const collRow = document.createElement("label");
+    collRow.className = "evo-viz-colors-row";
+    collRow.style.display = "none";
+    collRow.append("Collection");
+    const collSelect = document.createElement("select");
+    collSelect.className = "evo-viz-select";
+    collRow.appendChild(collSelect);
     const attrRow = document.createElement("label");
     attrRow.className = "evo-viz-colors-row";
     attrRow.append("Attribute");
@@ -37929,6 +38031,7 @@ var visualization_default = {
     legend.appendChild(legendBar);
     legend.appendChild(legendScale);
     legend.appendChild(legendCategories);
+    colorPanel.appendChild(collRow);
     colorPanel.appendChild(attrRow);
     colorPanel.appendChild(legend);
     container.appendChild(colorPanel);
@@ -37955,6 +38058,9 @@ var visualization_default = {
       attributes: /* @__PURE__ */ new Map(),
       colorAttribute: model.get("color_attribute") || "",
       colormap: model.get("colormap") || "viridis",
+      // Selectable collections (downhole objects expose collars + one glb per interval table).
+      collections: [],
+      activeCollection: null,
       // Tile content diagnostics (deduped across streaming tiles).
       diag: {
         attrs: /* @__PURE__ */ new Set(),
@@ -38024,8 +38130,16 @@ var visualization_default = {
       const maxLines = Math.max(4, Number(model.get("debug_max_lines") || 12));
       debugPanel.textContent = lines.slice(0, maxLines).join("\n");
     }
+    function syncControlsPanel() {
+      const anyVisible = collRow.style.display !== "none" || attrRow.style.display !== "none";
+      colorPanel.style.display = anyVisible ? "block" : "none";
+    }
     function rebuildAttributeOptions() {
-      const names = Array.from(state.attributes.keys()).sort();
+      let names = Array.from(state.attributes.keys()).sort();
+      if (state.activeCollection) {
+        const active = state.collections.find((c) => c.name === state.activeCollection);
+        if (active) names = names.filter((n) => active.attrNames.has(n));
+      }
       attrSelect.innerHTML = "";
       const noneOpt = document.createElement("option");
       noneOpt.value = "";
@@ -38037,35 +38151,75 @@ var visualization_default = {
         opt.textContent = displayAttrName(name);
         attrSelect.appendChild(opt);
       }
-      if (!state.attributes.has(state.colorAttribute)) state.colorAttribute = "";
+      if (!names.includes(state.colorAttribute)) state.colorAttribute = "";
       attrSelect.value = state.colorAttribute;
-      colorPanel.style.display = names.length ? "block" : "none";
+      attrRow.style.display = names.length ? "flex" : "none";
+      syncControlsPanel();
     }
-    function registerNode(node, attrSets) {
+    function registerNode(node, attrSets, collection) {
       const geometry = node.geometry;
       if (!geometry || !geometry.attributes) return;
       const materials = Array.isArray(node.material) ? node.material : [node.material];
       const count = geometry.attributes.position ? geometry.attributes.position.count : 0;
       const attrValues = /* @__PURE__ */ new Map();
       if (attrSets && attrSets.length) {
-        let set = attrSets.find((s) => !s.used && s.pointCount === count);
-        if (!set) set = attrSets.find((s) => !s.used);
+        const instCount = node.count != null ? node.count : null;
+        let candidates = attrSets.filter((s) => !s.used);
+        if (collection) {
+          candidates = candidates.filter((s) => s.collection === collection || s.collection == null);
+        }
+        let set = null;
+        if (candidates.length) {
+          if (instCount != null) set = candidates.find((s) => s.instanceCount === instCount);
+          if (!set) set = candidates.find((s) => s.pointCount === count);
+          if (!set) set = candidates[0];
+        }
         if (set) {
           set.used = true;
           for (const at of set.attrs) attrValues.set(at.name, at);
         }
       }
+      if (collection && state.activeCollection) node.visible = collection === state.activeCollection;
+      const instanced = !!node.isInstancedMesh;
       state.loadedNodes.push({
         node,
         geometry,
         materials,
+        collection: collection || null,
+        instanced,
         attrValues,
         originalColor: geometry.attributes.color ? geometry.attributes.color.clone() : null,
+        originalInstanceColor: instanced ? node.instanceColor || null : null,
         matState: materials.map((m) => ({
           vertexColors: m ? m.vertexColors : false,
           color: m && m.color ? m.color.clone() : null
         }))
       });
+    }
+    function applyCollectionVisibility() {
+      for (const entry of state.loadedNodes) {
+        entry.node.visible = !state.activeCollection || entry.collection === state.activeCollection;
+      }
+    }
+    function buildCollectionUI() {
+      collSelect.innerHTML = "";
+      if (state.collections.length < 2) {
+        collRow.style.display = "none";
+        state.activeCollection = null;
+        syncControlsPanel();
+        return;
+      }
+      for (const c of state.collections) {
+        const opt = document.createElement("option");
+        opt.value = c.name;
+        opt.textContent = c.name;
+        collSelect.appendChild(opt);
+      }
+      const preferred = state.collections.find((c) => c.attrNames.size > 0) || state.collections[0];
+      state.activeCollection = preferred.name;
+      collSelect.value = state.activeCollection;
+      collRow.style.display = "flex";
+      syncControlsPanel();
     }
     function applyColouring() {
       const name = state.colorAttribute;
@@ -38075,10 +38229,13 @@ var visualization_default = {
       const cmap = meta && meta.colormap ? meta.colormap : null;
       for (const entry of state.loadedNodes) {
         const geometry = entry.geometry;
+        const node = entry.node;
         const data = name && entry.attrValues ? entry.attrValues.get(name) : null;
+        const instanced = !!(node.isInstancedMesh && data && data.instanced);
         if (name && meta && data) {
-          const count = geometry.attributes.position ? geometry.attributes.position.count : data.values ? data.values.length : data.indices ? data.indices.length : 0;
+          const count = instanced ? node.count : geometry.attributes.position ? geometry.attributes.position.count : data.values ? data.values.length : data.indices ? data.indices.length : 0;
           const colors = new Float32Array(count * 3);
+          const hidden = new Uint8Array(count);
           if (data.kind === "category") {
             const idx = data.indices;
             const cats = data.categories || [];
@@ -38095,6 +38252,7 @@ var visualization_default = {
               let rgb;
               if (c < 0) {
                 rgb = NO_DATA;
+                hidden[i] = 1;
               } else if (labelColor) {
                 rgb = labelColor.get(String(cats[c])) || NO_DATA;
               } else {
@@ -38114,20 +38272,93 @@ var visualization_default = {
             for (let i = 0; i < count; i++) {
               const v = i < src.length ? src[i] : NaN;
               const rgb = v !== v ? NO_DATA : sampleStops((v - lo) / span, stops);
+              if (v !== v) hidden[i] = 1;
               colors[i * 3] = rgb[0];
               colors[i * 3 + 1] = rgb[1];
               colors[i * 3 + 2] = rgb[2];
             }
           }
-          geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
-          geometry.attributes.color.needsUpdate = true;
-          for (const m of entry.materials) {
-            if (!m) continue;
-            m.vertexColors = true;
-            if (m.color) m.color.setRGB(1, 1, 1);
-            m.needsUpdate = true;
+          if (instanced) {
+            let attr = node.instanceColor;
+            if (attr && attr.array && attr.array.length === colors.length) {
+              attr.array.set(colors);
+            } else {
+              attr = new THREE.InstancedBufferAttribute(colors, 3);
+              node.instanceColor = attr;
+            }
+            attr.needsUpdate = true;
+            const vcount = geometry.attributes.position ? geometry.attributes.position.count : 0;
+            const existingColor = geometry.attributes.color;
+            if (!existingColor || existingColor.count !== vcount) {
+              const white = new Float32Array(vcount * 3).fill(1);
+              geometry.setAttribute("color", new THREE.BufferAttribute(white, 3));
+            } else {
+              existingColor.array.fill(1);
+              existingColor.needsUpdate = true;
+            }
+            for (const m of entry.materials) {
+              if (!m) continue;
+              m.vertexColors = true;
+              if (m.color) m.color.setRGB(1, 1, 1);
+              m.needsUpdate = true;
+            }
+            if (node.instanceMatrix) {
+              if (!entry.originalInstanceMatrix) {
+                entry.originalInstanceMatrix = node.instanceMatrix.array.slice();
+              }
+              const dst = node.instanceMatrix.array;
+              dst.set(entry.originalInstanceMatrix);
+              for (let i = 0; i < count; i++) {
+                if (!hidden[i]) continue;
+                const o = i * 16;
+                dst[o] = 0;
+                dst[o + 1] = 0;
+                dst[o + 2] = 0;
+                dst[o + 4] = 0;
+                dst[o + 5] = 0;
+                dst[o + 6] = 0;
+                dst[o + 8] = 0;
+                dst[o + 9] = 0;
+                dst[o + 10] = 0;
+              }
+              node.instanceMatrix.needsUpdate = true;
+            }
+          } else {
+            geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+            geometry.attributes.color.needsUpdate = true;
+            for (const m of entry.materials) {
+              if (!m) continue;
+              m.vertexColors = true;
+              if (m.color) m.color.setRGB(1, 1, 1);
+              m.needsUpdate = true;
+            }
+            if ((node.isPoints || node.isLine || node.isLineSegments) && geometry.attributes.position) {
+              const pos = geometry.attributes.position;
+              if (!entry.originalPositions) entry.originalPositions = pos.array.slice();
+              const pa = pos.array;
+              pa.set(entry.originalPositions);
+              for (let i = 0; i < count; i++) {
+                if (!hidden[i]) continue;
+                pa[i * 3] = NaN;
+                pa[i * 3 + 1] = NaN;
+                pa[i * 3 + 2] = NaN;
+              }
+              pos.needsUpdate = true;
+            }
           }
         } else {
+          if (node.isInstancedMesh) {
+            if (entry.originalInstanceMatrix && node.instanceMatrix) {
+              node.instanceMatrix.array.set(entry.originalInstanceMatrix);
+              node.instanceMatrix.needsUpdate = true;
+            }
+            node.instanceColor = entry.originalInstanceColor || null;
+            if (node.instanceColor) node.instanceColor.needsUpdate = true;
+          }
+          if (entry.originalPositions && geometry.attributes.position) {
+            geometry.attributes.position.array.set(entry.originalPositions);
+            geometry.attributes.position.needsUpdate = true;
+          }
           if (entry.originalColor) {
             geometry.setAttribute("color", entry.originalColor.clone());
             geometry.attributes.color.needsUpdate = true;
@@ -38144,6 +38375,125 @@ var visualization_default = {
         }
       }
       updateLegend();
+      publishColourDiagnostics();
+    }
+    function describeAttrData(data) {
+      if (data.kind === "continuous" && data.values) {
+        const vals = data.values;
+        let min = Infinity;
+        let max = -Infinity;
+        let nan = 0;
+        for (let i = 0; i < vals.length; i++) {
+          const v = vals[i];
+          if (v !== v) {
+            nan += 1;
+            continue;
+          }
+          if (v < min) min = v;
+          if (v > max) max = v;
+        }
+        const bins = new Array(10).fill(0);
+        const span = max - min || 1;
+        for (let i = 0; i < vals.length; i++) {
+          const v = vals[i];
+          if (v !== v) continue;
+          let b = Math.floor((v - min) / span * 10);
+          if (b < 0) b = 0;
+          if (b > 9) b = 9;
+          bins[b] += 1;
+        }
+        return {
+          kind: "continuous",
+          declaredMin: data.min,
+          declaredMax: data.max,
+          actualMin: isFinite(min) ? min : null,
+          actualMax: isFinite(max) ? max : null,
+          nanCount: nan,
+          total: vals.length,
+          histogram: bins,
+          hasColormap: !!data.colormap,
+          colormapKind: data.colormap ? data.colormap.kind : null,
+          colormapMin: data.colormap ? data.colormap.min : null,
+          colormapMax: data.colormap ? data.colormap.max : null,
+          colormapStops: data.colormap && data.colormap.stops ? data.colormap.stops.length : null
+        };
+      }
+      if (data.kind === "category" && data.indices) {
+        const counts = {};
+        let nan = 0;
+        for (let i = 0; i < data.indices.length; i++) {
+          const c = data.indices[i];
+          if (c < 0) {
+            nan += 1;
+            continue;
+          }
+          counts[c] = (counts[c] || 0) + 1;
+        }
+        return {
+          kind: "category",
+          categories: data.categories,
+          nullCount: nan,
+          total: data.indices.length,
+          counts
+        };
+      }
+      return null;
+    }
+    function publishColourDiagnostics() {
+      if (!model.get("debug")) return;
+      try {
+        const name = state.colorAttribute;
+        const nodes = state.loadedNodes.map((entry) => {
+          const node = entry.node;
+          const geom = entry.geometry;
+          const data = name && entry.attrValues ? entry.attrValues.get(name) : null;
+          const mat = entry.materials && entry.materials[0];
+          let sample = null;
+          if (data && data.kind === "continuous" && data.values && data.values.length) {
+            sample = [data.values[0], data.values[Math.floor(data.values.length / 2)]];
+          } else if (data && data.kind === "category" && data.indices && data.indices.length) {
+            sample = [data.indices[0], data.indices[Math.floor(data.indices.length / 2)]];
+          }
+          return {
+            collection: entry.collection,
+            visible: node.visible,
+            type: node.type,
+            isInstancedMesh: !!node.isInstancedMesh,
+            isMesh: !!node.isMesh,
+            isLine: !!node.isLine,
+            isPoints: !!node.isPoints,
+            count: node.count != null ? node.count : null,
+            posCount: geom.attributes.position ? geom.attributes.position.count : null,
+            hasInstanceColor: !!node.instanceColor,
+            instanceColorLen: node.instanceColor ? node.instanceColor.array.length : null,
+            hasGeomColor: !!geom.attributes.color,
+            matType: mat ? mat.type : null,
+            matVertexColors: mat ? !!mat.vertexColors : null,
+            dataForAttr: !!data,
+            dataKind: data ? data.kind : null,
+            dataInstanced: data ? !!data.instanced : null,
+            dataLen: data ? data.values ? data.values.length : data.indices ? data.indices.length : null : null,
+            dataSample: sample,
+            stats: data ? describeAttrData(data) : null,
+            attrNames: entry.attrValues ? Array.from(entry.attrValues.keys()) : []
+          };
+        });
+        const info = {
+          activeCollection: state.activeCollection,
+          colorAttribute: name,
+          attributeKeys: Array.from(state.attributes.keys()),
+          nodeCount: nodes.length,
+          nodes
+        };
+        model.set("_debug_info", JSON.stringify(info));
+        if (model.save_changes) model.save_changes();
+      } catch (err) {
+        try {
+          model.set("_debug_info", JSON.stringify({ error: String(err && err.message || err) }));
+          if (model.save_changes) model.save_changes();
+        } catch {
+        }
+      }
     }
     function updateLegend() {
       const name = state.colorAttribute;
@@ -38205,6 +38555,14 @@ var visualization_default = {
       }
       applyColouring();
     });
+    collSelect.addEventListener("change", () => {
+      state.activeCollection = collSelect.value;
+      applyCollectionVisibility();
+      const active = state.collections.find((c) => c.name === state.activeCollection);
+      if (active && !active.attrNames.has(state.colorAttribute)) state.colorAttribute = "";
+      rebuildAttributeOptions();
+      applyColouring();
+    });
     function loadData() {
       try {
         loadDataInner();
@@ -38247,6 +38605,8 @@ var visualization_default = {
       state.framed = false;
       state.loadedNodes = [];
       state.attributes = /* @__PURE__ */ new Map();
+      state.collections = [];
+      state.activeCollection = null;
       state.diag = {
         attrs: /* @__PURE__ */ new Set(),
         featureIds: /* @__PURE__ */ new Set(),
@@ -38310,6 +38670,19 @@ var visualization_default = {
             };
         }
         const objGlbBytes = [];
+        const collectionByGlb = /* @__PURE__ */ new Map();
+        for (const c of obj.collections || []) {
+          for (const p of c.glbs || []) {
+            collectionByGlb.set(p, c.name);
+            collectionByGlb.set(String(p).split("/").pop(), c.name);
+          }
+          let entry = state.collections.find((e) => e.name === c.name);
+          if (!entry) {
+            entry = { name: c.name, attrNames: /* @__PURE__ */ new Set() };
+            state.collections.push(entry);
+          }
+          for (const an of c.attributes || []) entry.attrNames.add(an);
+        }
         for (const f of obj.files) {
           state.stats.fileCount += 1;
           const slice = bytes.subarray(f.offset, f.offset + f.length);
@@ -38322,7 +38695,7 @@ var visualization_default = {
             state.stats.gzFileCount += 1;
             typePath = f.path.replace(/\.gz$/i, "");
           }
-          if (/\.glb$/i.test(typePath)) objGlbBytes.push(slice);
+          if (/\.glb$/i.test(typePath)) objGlbBytes.push({ bytes: slice, path: f.path, typePath });
           if (f.path.endsWith("/tileset.json")) {
             try {
               const text = new TextDecoder().decode(payload);
@@ -38363,12 +38736,21 @@ var visualization_default = {
           for (const gbytes of objGlbBytes) {
             let decoded = null;
             try {
-              decoded = decodeGlbAttributes(gbytes, nameByHash);
+              decoded = decodeGlbAttributes(gbytes.bytes, nameByHash);
             } catch (err) {
               console.warn("[evo_viz] attribute decode failed", err);
             }
             if (!decoded || !decoded.attrs.length) continue;
-            attrSets.push({ pointCount: decoded.pointCount, attrs: decoded.attrs, used: false });
+            const base = String(gbytes.path).split("/").pop();
+            const typeBase = String(gbytes.typePath).split("/").pop();
+            const setCollection = collectionByGlb.get(gbytes.path) || collectionByGlb.get(gbytes.typePath) || collectionByGlb.get(base) || collectionByGlb.get(typeBase) || null;
+            attrSets.push({
+              pointCount: decoded.pointCount,
+              instanceCount: decoded.instanceCount || 0,
+              collection: setCollection,
+              attrs: decoded.attrs,
+              used: false
+            });
             for (const at of decoded.attrs) {
               let meta = state.attributes.get(at.name);
               if (!meta) {
@@ -38407,10 +38789,20 @@ var visualization_default = {
             refreshDebugPanel();
             return;
           }
+          let collName = null;
+          const contentUri = e && e.tile && e.tile.content && e.tile.content.uri;
+          if (contentUri && collectionByGlb.size) {
+            let key = contentUri;
+            try {
+              key = new URL(contentUri, obj.root).pathname.replace(/^\//, "");
+            } catch {
+            }
+            collName = collectionByGlb.get(key) || collectionByGlb.get(key.split("/").pop()) || collectionByGlb.get(String(contentUri).split("/").pop()) || null;
+          }
           modelScene.traverse((node) => {
             if (!node) return;
-            if ((node.isPoints || node.isMesh) && node.geometry) {
-              registerNode(node, attrSets);
+            if ((node.isPoints || node.isMesh || node.isLine) && node.geometry) {
+              registerNode(node, attrSets, collName);
             }
             if (!node.isPoints || !node.material) return;
             state.stats.pointNodes += 1;
@@ -38424,6 +38816,7 @@ var visualization_default = {
               mat.needsUpdate = true;
             }
           });
+          applyCollectionVisibility();
           rebuildAttributeOptions();
           applyColouring();
           try {
@@ -38486,6 +38879,8 @@ var visualization_default = {
         if (tiles.group) world.add(tiles.group);
         state.tiles.push(tiles);
       }
+      buildCollectionUI();
+      rebuildAttributeOptions();
       refreshDebugPanel();
     }
     function tryFrame() {

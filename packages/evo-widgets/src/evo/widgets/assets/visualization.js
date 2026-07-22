@@ -255,6 +255,53 @@ function isNoData(v) {
   return !isFinite(v) || Math.abs(v) >= 1e308;
 }
 
+// Some source data (e.g. classic drillhole CSVs) bakes no-data markers such as -999 / -9999
+// straight into the values without declaring them. These aren't caught by isNoData yet they wreck
+// the colour range: a -999 spike pins the gradient minimum ~1000 below the real data so every real
+// value collapses into a sliver at the top of the ramp. Detect a discrete value at either extreme
+// that sits in a gap far larger than the spread of the remaining data and NaN it out in place.
+// The 20x threshold is deliberately conservative so genuine (even heavily skewed) outliers survive.
+function stripSentinelSpikes(values) {
+  const finite = [];
+  for (let i = 0; i < values.length; i++) {
+    if (values[i] === values[i]) finite.push(values[i]);
+  }
+  if (finite.length < 8) return;
+  finite.sort((a, b) => a - b);
+  const sentinels = [];
+  let lo = 0;
+  let hi = finite.length - 1;
+  for (let pass = 0; pass < 4 && hi - lo > 3; pass++) {
+    const min = finite[lo];
+    const max = finite[hi];
+    if (max - min <= 0) break;
+    let lo2 = lo;
+    while (lo2 <= hi && finite[lo2] === min) lo2++;
+    let hi2 = hi;
+    while (hi2 >= lo && finite[hi2] === max) hi2--;
+    const lowGap = lo2 <= hi ? finite[lo2] - min : 0;
+    const highGap = hi2 >= lo ? max - finite[hi2] : 0;
+    const restSpanLow = lo2 <= hi ? max - finite[lo2] : 0;
+    const restSpanHigh = hi2 >= lo ? finite[hi2] - min : 0;
+    if (lowGap > 0 && lowGap >= 20 * Math.max(restSpanLow, 1e-12)) {
+      sentinels.push(min);
+      lo = lo2;
+      continue;
+    }
+    if (highGap > 0 && highGap >= 20 * Math.max(restSpanHigh, 1e-12)) {
+      sentinels.push(max);
+      hi = hi2;
+      continue;
+    }
+    break;
+  }
+  if (!sentinels.length) return;
+  const drop = new Set(sentinels);
+  for (let i = 0; i < values.length; i++) {
+    if (drop.has(values[i])) values[i] = NaN;
+  }
+}
+
 // Split a glb Uint8Array into its parsed JSON document and its BIN chunk.
 function parseGlb(bytes) {
   if (!bytes || bytes.length < 12) return null;
@@ -393,6 +440,31 @@ function decodeGlbAttributes(bytes, nameByHash) {
     }
   }
 
+  // Geoscience geometry is usually GPU-instanced (one template mesh drawn once per interval
+  // or tube), with attribute values attached per *instance* via EXT_instance_features rather
+  // than per vertex. Map each property table to the instance feature-id rows that index into
+  // it (or identity when the feature id is implicit).
+  let instanceCount = 0;
+  const tableInstanceFeature = {};
+  for (const node of gltf.nodes || []) {
+    const nodeExt = node.extensions || {};
+    const instancing = nodeExt.EXT_mesh_gpu_instancing;
+    const features = nodeExt.EXT_instance_features;
+    if (!instancing || !features || !Array.isArray(features.featureIds)) continue;
+    const instAttrs = instancing.attributes || {};
+    for (const fid of features.featureIds) {
+      if (fid.propertyTable == null || fid.propertyTable in tableInstanceFeature) continue;
+      if (fid.featureCount) instanceCount = fid.featureCount;
+      let rows = null; // null => identity mapping (instance i -> table row i)
+      if (fid.attribute != null) {
+        const accessorIndex = instAttrs["_FEATURE_ID_" + fid.attribute];
+        if (accessorIndex != null) rows = readAccessorScalar(gltf, bin, accessorIndex);
+      }
+      tableInstanceFeature[fid.propertyTable] = { rows, nullFeatureId: fid.nullFeatureId };
+    }
+    break; // one instanced node per glb
+  }
+
   const attrs = [];
   const tables = ext.propertyTables;
   for (let ti = 0; ti < tables.length; ti++) {
@@ -400,6 +472,7 @@ function decodeGlbAttributes(bytes, nameByHash) {
     const cls = classes[table.class] || {};
     const clsProps = cls.properties || {};
     const count = table.count;
+    const instFeat = tableInstanceFeature[ti];
 
     // Category attribute: the attribute hash equals the property table's *class* name.
     if (typeof table.class === "string" && table.class.startsWith("attribute_")) {
@@ -409,22 +482,41 @@ function decodeGlbAttributes(bytes, nameByHash) {
         const categories = readMetaStringColumn(
           gltf, bin, table.properties && table.properties.value, count, valueDef.stringOffsetType
         );
-        const accessorIndex = tableFeatureAccessor[ti];
-        const indices = accessorIndex != null ? readAccessorScalar(gltf, bin, accessorIndex) : null;
-        if (categories && indices) {
-          attrs.push({
-            name: meta.name,
-            kind: "category",
-            indices,
-            categories,
-            colormap: meta.colormap || null,
-          });
+        if (categories) {
+          if (instFeat) {
+            // One category index per instance (null feature ids become -1 / no-data).
+            const indices = new Array(instanceCount);
+            for (let i = 0; i < instanceCount; i++) {
+              const row = instFeat.rows ? instFeat.rows[i] : i;
+              indices[i] = row === instFeat.nullFeatureId || row == null || row < 0 ? -1 : row;
+            }
+            attrs.push({
+              name: meta.name,
+              kind: "category",
+              indices,
+              categories,
+              instanced: true,
+              colormap: meta.colormap || null,
+            });
+          } else {
+            const accessorIndex = tableFeatureAccessor[ti];
+            const indices = accessorIndex != null ? readAccessorScalar(gltf, bin, accessorIndex) : null;
+            if (indices) {
+              attrs.push({
+                name: meta.name,
+                kind: "category",
+                indices,
+                categories,
+                colormap: meta.colormap || null,
+              });
+            }
+          }
         }
         continue;
       }
     }
 
-    // Continuous attributes: columns named attribute_<hash>, indexed by vertex id.
+    // Continuous attributes: columns named attribute_<hash>, indexed by vertex or instance.
     for (const propName of Object.keys(table.properties || {})) {
       if (!propName.startsWith("attribute_")) continue;
       const meta = nameByHash[propName.slice("attribute_".length)];
@@ -434,24 +526,39 @@ function decodeGlbAttributes(bytes, nameByHash) {
         gltf, bin, table.properties[propName], propDef.componentType, count
       );
       if (!column) continue;
-      const values = new Float32Array(count);
+      const outCount = instFeat ? instanceCount : count;
+      const values = new Float32Array(outCount);
+      for (let i = 0; i < outCount; i++) {
+        const row = instFeat ? (instFeat.rows ? instFeat.rows[i] : i) : i;
+        const v =
+          instFeat && (row === instFeat.nullFeatureId || row == null || row < 0 || row >= column.length)
+            ? NaN
+            : column[row];
+        values[i] = isNoData(v) ? NaN : v;
+      }
+      // Drop undeclared no-data sentinels (e.g. -999) so they neither skew the range nor render.
+      stripSentinelSpikes(values);
       let min = Infinity;
       let max = -Infinity;
-      for (let i = 0; i < count; i++) {
-        const v = column[i];
-        if (isNoData(v)) {
-          values[i] = NaN;
-          continue;
-        }
-        values[i] = v;
+      for (let i = 0; i < outCount; i++) {
+        const v = values[i];
+        if (v !== v) continue;
         if (v < min) min = v;
         if (v > max) max = v;
       }
-      attrs.push({ name: meta.name, kind: "continuous", values, min, max, colormap: meta.colormap || null });
+      attrs.push({
+        name: meta.name,
+        kind: "continuous",
+        values,
+        min,
+        max,
+        instanced: !!instFeat,
+        colormap: meta.colormap || null,
+      });
     }
   }
 
-  return { pointCount, attrs };
+  return { pointCount, instanceCount, attrs };
 }
 
 // --- Tile content diagnostics --------------------------------------------------------
@@ -584,12 +691,17 @@ function stripGzSuffix(uri) {
 
 function normalizeTileUris(tile) {
   if (!tile || typeof tile !== "object") return;
-  if (tile.content && tile.content.uri) {
-    tile.content.uri = stripGzSuffix(tile.content.uri);
+  if (tile.content) {
+    for (const key of ["uri", "url"]) {
+      if (tile.content[key]) tile.content[key] = stripGzSuffix(tile.content[key]);
+    }
   }
   if (Array.isArray(tile.contents)) {
     for (const c of tile.contents) {
-      if (c && c.uri) c.uri = stripGzSuffix(c.uri);
+      if (!c) continue;
+      for (const key of ["uri", "url"]) {
+        if (c[key]) c[key] = stripGzSuffix(c[key]);
+      }
     }
   }
   if (Array.isArray(tile.children)) {
@@ -707,10 +819,19 @@ export default {
     debugPanel.className = "evo-viz-debug";
     container.appendChild(debugPanel);
 
-    // --- Attribute-driven colouring controls (hidden until scalars are found) ---------
+    // --- Left-side controls panel: collection selector above the attribute selector -----
     const colorPanel = document.createElement("div");
     colorPanel.className = "evo-viz-colors";
     colorPanel.style.display = "none";
+
+    // Collection selector (hidden until a multi-collection object is loaded).
+    const collRow = document.createElement("label");
+    collRow.className = "evo-viz-colors-row";
+    collRow.style.display = "none";
+    collRow.append("Collection");
+    const collSelect = document.createElement("select");
+    collSelect.className = "evo-viz-select";
+    collRow.appendChild(collSelect);
 
     const attrRow = document.createElement("label");
     attrRow.className = "evo-viz-colors-row";
@@ -736,6 +857,7 @@ export default {
     legend.appendChild(legendScale);
     legend.appendChild(legendCategories);
 
+    colorPanel.appendChild(collRow);
     colorPanel.appendChild(attrRow);
     colorPanel.appendChild(legend);
     container.appendChild(colorPanel);
@@ -772,6 +894,9 @@ export default {
       attributes: new Map(),
       colorAttribute: model.get("color_attribute") || "",
       colormap: model.get("colormap") || "viridis",
+      // Selectable collections (downhole objects expose collars + one glb per interval table).
+      collections: [],
+      activeCollection: null,
       // Tile content diagnostics (deduped across streaming tiles).
       diag: {
         attrs: new Set(),
@@ -850,9 +975,21 @@ export default {
 
     // --- Attribute-driven colouring ------------------------------------------------
 
+    // Show the shared left-side controls panel whenever either selector row is visible.
+    function syncControlsPanel() {
+      const anyVisible = collRow.style.display !== "none" || attrRow.style.display !== "none";
+      colorPanel.style.display = anyVisible ? "block" : "none";
+    }
+
     // Rebuild the attribute dropdown from the scalars discovered so far.
     function rebuildAttributeOptions() {
-      const names = Array.from(state.attributes.keys()).sort();
+      let names = Array.from(state.attributes.keys()).sort();
+      // Scope the choices to the active collection so, e.g., assay attributes don't appear
+      // while the lithology collection is selected.
+      if (state.activeCollection) {
+        const active = state.collections.find((c) => c.name === state.activeCollection);
+        if (active) names = names.filter((n) => active.attrNames.has(n));
+      }
       attrSelect.innerHTML = "";
       const noneOpt = document.createElement("option");
       noneOpt.value = "";
@@ -865,15 +1002,17 @@ export default {
         attrSelect.appendChild(opt);
       }
       // Keep the selection if it still exists, else fall back to original colours.
-      if (!state.attributes.has(state.colorAttribute)) state.colorAttribute = "";
+      if (!names.includes(state.colorAttribute)) state.colorAttribute = "";
       attrSelect.value = state.colorAttribute;
-      colorPanel.style.display = names.length ? "block" : "none";
+      attrRow.style.display = names.length ? "flex" : "none";
+      syncControlsPanel();
     }
 
     // Snapshot a node's original styling and attach any decoded attribute value arrays.
     // `attrSets` are the per-vertex arrays decoded from this object's glbs; we match a set
-    // to this geometry by vertex count (each set is consumed once).
-    function registerNode(node, attrSets) {
+    // to this geometry by vertex count (each set is consumed once). `collection` names the
+    // collection this geometry belongs to (or null for single-collection objects).
+    function registerNode(node, attrSets, collection) {
       const geometry = node.geometry;
       if (!geometry || !geometry.attributes) return;
       const materials = Array.isArray(node.material) ? node.material : [node.material];
@@ -881,25 +1020,75 @@ export default {
 
       const attrValues = new Map();
       if (attrSets && attrSets.length) {
-        let set = attrSets.find((s) => !s.used && s.pointCount === count);
-        if (!set) set = attrSets.find((s) => !s.used);
+        // Restrict to attribute sets from this node's own collection (glbs from other
+        // collections may share this vertex count). Sets whose collection couldn't be
+        // resolved stay eligible as a fallback. Disambiguate by instance count first
+        // (per-instance data length), then vertex count.
+        const instCount = node.count != null ? node.count : null;
+        let candidates = attrSets.filter((s) => !s.used);
+        if (collection) {
+          candidates = candidates.filter((s) => s.collection === collection || s.collection == null);
+        }
+        let set = null;
+        if (candidates.length) {
+          if (instCount != null) set = candidates.find((s) => s.instanceCount === instCount);
+          if (!set) set = candidates.find((s) => s.pointCount === count);
+          if (!set) set = candidates[0];
+        }
         if (set) {
           set.used = true;
           for (const at of set.attrs) attrValues.set(at.name, at);
         }
       }
 
+      if (collection && state.activeCollection) node.visible = collection === state.activeCollection;
+
+      const instanced = !!node.isInstancedMesh;
       state.loadedNodes.push({
         node,
         geometry,
         materials,
+        collection: collection || null,
+        instanced,
         attrValues,
         originalColor: geometry.attributes.color ? geometry.attributes.color.clone() : null,
+        originalInstanceColor: instanced ? node.instanceColor || null : null,
         matState: materials.map((m) => ({
           vertexColors: m ? m.vertexColors : false,
           color: m && m.color ? m.color.clone() : null,
         })),
       });
+    }
+
+    // Show only the geometry belonging to the active collection (all geometry when none set).
+    function applyCollectionVisibility() {
+      for (const entry of state.loadedNodes) {
+        entry.node.visible = !state.activeCollection || entry.collection === state.activeCollection;
+      }
+    }
+
+    // Populate the collection dropdown and pick a sensible default (the first collection
+    // that actually has colourable attributes, so the viewer opens on real data rather than
+    // bare collar points).
+    function buildCollectionUI() {
+      collSelect.innerHTML = "";
+      if (state.collections.length < 2) {
+        collRow.style.display = "none";
+        state.activeCollection = null;
+        syncControlsPanel();
+        return;
+      }
+      for (const c of state.collections) {
+        const opt = document.createElement("option");
+        opt.value = c.name;
+        opt.textContent = c.name;
+        collSelect.appendChild(opt);
+      }
+      const preferred = state.collections.find((c) => c.attrNames.size > 0) || state.collections[0];
+      state.activeCollection = preferred.name;
+      collSelect.value = state.activeCollection;
+      collRow.style.display = "flex";
+      syncControlsPanel();
     }
 
     // Apply the current attribute + colour map to every loaded node (or restore originals).
@@ -916,12 +1105,21 @@ export default {
 
       for (const entry of state.loadedNodes) {
         const geometry = entry.geometry;
+        const node = entry.node;
         const data = name && entry.attrValues ? entry.attrValues.get(name) : null;
+        // Instanced geometry (GPU-instanced tubes/intervals) carries one value per instance
+        // and is coloured through an instanceColor buffer rather than per-vertex colours.
+        const instanced = !!(node.isInstancedMesh && data && data.instanced);
         if (name && meta && data) {
-          const count = geometry.attributes.position
+          const count = instanced
+            ? node.count
+            : geometry.attributes.position
             ? geometry.attributes.position.count
             : (data.values ? data.values.length : (data.indices ? data.indices.length : 0));
           const colors = new Float32Array(count * 3);
+          // Track which entries are missing (NoData / NULL) so they can be hidden entirely
+          // rather than drawn in the background colour as stray tubes/points.
+          const hidden = new Uint8Array(count);
           if (data.kind === "category") {
             const idx = data.indices;
             const cats = data.categories || [];
@@ -939,6 +1137,7 @@ export default {
               let rgb;
               if (c < 0) {
                 rgb = NO_DATA;
+                hidden[i] = 1;
               } else if (labelColor) {
                 rgb = labelColor.get(String(cats[c])) || NO_DATA;
               } else {
@@ -959,21 +1158,102 @@ export default {
             for (let i = 0; i < count; i++) {
               const v = i < src.length ? src[i] : NaN;
               const rgb = v !== v ? NO_DATA : sampleStops((v - lo) / span, stops);
+              if (v !== v) hidden[i] = 1;
               colors[i * 3] = rgb[0];
               colors[i * 3 + 1] = rgb[1];
               colors[i * 3 + 2] = rgb[2];
             }
           }
-          geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
-          geometry.attributes.color.needsUpdate = true;
-          for (const m of entry.materials) {
-            if (!m) continue;
-            m.vertexColors = true;
-            if (m.color) m.color.setRGB(1, 1, 1);
-            m.needsUpdate = true;
+          if (instanced) {
+            // Per-instance colours: three.js multiplies material.color by instanceColor.
+            // Reuse the existing instanceColor buffer when possible: replacing it with a
+            // brand-new attribute leaves three.js binding the previous GL buffer (its vertex
+            // attribute binding is cached), so switching attributes wouldn't update the scene.
+            let attr = node.instanceColor;
+            if (attr && attr.array && attr.array.length === colors.length) {
+              attr.array.set(colors);
+            } else {
+              attr = new THREE.InstancedBufferAttribute(colors, 3);
+              node.instanceColor = attr;
+            }
+            attr.needsUpdate = true;
+            // three.js only applies instanceColor in the *fragment* stage when USE_COLOR is
+            // active (material.vertexColors === true); with vertexColors off the per-instance
+            // colours are computed in the vertex shader and then discarded, leaving every tube
+            // flat white. Enabling vertex colours plus a white per-vertex colour attribute makes
+            // the shader compute white * instanceColor === instanceColor for each instance.
+            const vcount = geometry.attributes.position ? geometry.attributes.position.count : 0;
+            const existingColor = geometry.attributes.color;
+            if (!existingColor || existingColor.count !== vcount) {
+              const white = new Float32Array(vcount * 3).fill(1);
+              geometry.setAttribute("color", new THREE.BufferAttribute(white, 3));
+            } else {
+              existingColor.array.fill(1);
+              existingColor.needsUpdate = true;
+            }
+            for (const m of entry.materials) {
+              if (!m) continue;
+              m.vertexColors = true;
+              if (m.color) m.color.setRGB(1, 1, 1);
+              m.needsUpdate = true;
+            }
+            // Hide missing instances: collapse each hidden instance's matrix to a zero-size point
+            // (keep its translation, zero the rotation/scale block) so it disappears completely
+            // instead of rendering as a background-coloured tube.
+            if (node.instanceMatrix) {
+              if (!entry.originalInstanceMatrix) {
+                entry.originalInstanceMatrix = node.instanceMatrix.array.slice();
+              }
+              const dst = node.instanceMatrix.array;
+              dst.set(entry.originalInstanceMatrix);
+              for (let i = 0; i < count; i++) {
+                if (!hidden[i]) continue;
+                const o = i * 16;
+                dst[o] = 0; dst[o + 1] = 0; dst[o + 2] = 0;
+                dst[o + 4] = 0; dst[o + 5] = 0; dst[o + 6] = 0;
+                dst[o + 8] = 0; dst[o + 9] = 0; dst[o + 10] = 0;
+              }
+              node.instanceMatrix.needsUpdate = true;
+            }
+          } else {
+            geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+            geometry.attributes.color.needsUpdate = true;
+            for (const m of entry.materials) {
+              if (!m) continue;
+              m.vertexColors = true;
+              if (m.color) m.color.setRGB(1, 1, 1);
+              m.needsUpdate = true;
+            }
+            // Hide missing points/line vertices by pushing them to NaN (the GPU discards them);
+            // meshes are left coloured to avoid tearing their triangles.
+            if ((node.isPoints || node.isLine || node.isLineSegments) && geometry.attributes.position) {
+              const pos = geometry.attributes.position;
+              if (!entry.originalPositions) entry.originalPositions = pos.array.slice();
+              const pa = pos.array;
+              pa.set(entry.originalPositions);
+              for (let i = 0; i < count; i++) {
+                if (!hidden[i]) continue;
+                pa[i * 3] = NaN;
+                pa[i * 3 + 1] = NaN;
+                pa[i * 3 + 2] = NaN;
+              }
+              pos.needsUpdate = true;
+            }
           }
         } else {
           // Restore the node's original styling.
+          if (node.isInstancedMesh) {
+            if (entry.originalInstanceMatrix && node.instanceMatrix) {
+              node.instanceMatrix.array.set(entry.originalInstanceMatrix);
+              node.instanceMatrix.needsUpdate = true;
+            }
+            node.instanceColor = entry.originalInstanceColor || null;
+            if (node.instanceColor) node.instanceColor.needsUpdate = true;
+          }
+          if (entry.originalPositions && geometry.attributes.position) {
+            geometry.attributes.position.array.set(entry.originalPositions);
+            geometry.attributes.position.needsUpdate = true;
+          }
           if (entry.originalColor) {
             geometry.setAttribute("color", entry.originalColor.clone());
             geometry.attributes.color.needsUpdate = true;
@@ -990,6 +1270,130 @@ export default {
         }
       }
       updateLegend();
+      publishColourDiagnostics();
+    }
+
+    function describeAttrData(data) {
+      if (data.kind === "continuous" && data.values) {
+        const vals = data.values;
+        let min = Infinity;
+        let max = -Infinity;
+        let nan = 0;
+        for (let i = 0; i < vals.length; i++) {
+          const v = vals[i];
+          if (v !== v) {
+            nan += 1;
+            continue;
+          }
+          if (v < min) min = v;
+          if (v > max) max = v;
+        }
+        const bins = new Array(10).fill(0);
+        const span = max - min || 1;
+        for (let i = 0; i < vals.length; i++) {
+          const v = vals[i];
+          if (v !== v) continue;
+          let b = Math.floor(((v - min) / span) * 10);
+          if (b < 0) b = 0;
+          if (b > 9) b = 9;
+          bins[b] += 1;
+        }
+        return {
+          kind: "continuous",
+          declaredMin: data.min,
+          declaredMax: data.max,
+          actualMin: isFinite(min) ? min : null,
+          actualMax: isFinite(max) ? max : null,
+          nanCount: nan,
+          total: vals.length,
+          histogram: bins,
+          hasColormap: !!data.colormap,
+          colormapKind: data.colormap ? data.colormap.kind : null,
+          colormapMin: data.colormap ? data.colormap.min : null,
+          colormapMax: data.colormap ? data.colormap.max : null,
+          colormapStops: data.colormap && data.colormap.stops ? data.colormap.stops.length : null,
+        };
+      }
+      if (data.kind === "category" && data.indices) {
+        const counts = {};
+        let nan = 0;
+        for (let i = 0; i < data.indices.length; i++) {
+          const c = data.indices[i];
+          if (c < 0) {
+            nan += 1;
+            continue;
+          }
+          counts[c] = (counts[c] || 0) + 1;
+        }
+        return {
+          kind: "category",
+          categories: data.categories,
+          nullCount: nan,
+          total: data.indices.length,
+          counts,
+        };
+      }
+      return null;
+    }
+
+    // Send per-node runtime facts back to Python (viewer._debug_info) so colouring issues can
+    // be diagnosed without browser devtools. Only runs when the widget is in debug mode.
+    function publishColourDiagnostics() {
+      if (!model.get("debug")) return;
+      try {
+        const name = state.colorAttribute;
+        const nodes = state.loadedNodes.map((entry) => {
+          const node = entry.node;
+          const geom = entry.geometry;
+          const data = name && entry.attrValues ? entry.attrValues.get(name) : null;
+          const mat = entry.materials && entry.materials[0];
+          let sample = null;
+          if (data && data.kind === "continuous" && data.values && data.values.length) {
+            sample = [data.values[0], data.values[Math.floor(data.values.length / 2)]];
+          } else if (data && data.kind === "category" && data.indices && data.indices.length) {
+            sample = [data.indices[0], data.indices[Math.floor(data.indices.length / 2)]];
+          }
+          return {
+            collection: entry.collection,
+            visible: node.visible,
+            type: node.type,
+            isInstancedMesh: !!node.isInstancedMesh,
+            isMesh: !!node.isMesh,
+            isLine: !!node.isLine,
+            isPoints: !!node.isPoints,
+            count: node.count != null ? node.count : null,
+            posCount: geom.attributes.position ? geom.attributes.position.count : null,
+            hasInstanceColor: !!node.instanceColor,
+            instanceColorLen: node.instanceColor ? node.instanceColor.array.length : null,
+            hasGeomColor: !!geom.attributes.color,
+            matType: mat ? mat.type : null,
+            matVertexColors: mat ? !!mat.vertexColors : null,
+            dataForAttr: !!data,
+            dataKind: data ? data.kind : null,
+            dataInstanced: data ? !!data.instanced : null,
+            dataLen: data ? (data.values ? data.values.length : (data.indices ? data.indices.length : null)) : null,
+            dataSample: sample,
+            stats: data ? describeAttrData(data) : null,
+            attrNames: entry.attrValues ? Array.from(entry.attrValues.keys()) : [],
+          };
+        });
+        const info = {
+          activeCollection: state.activeCollection,
+          colorAttribute: name,
+          attributeKeys: Array.from(state.attributes.keys()),
+          nodeCount: nodes.length,
+          nodes,
+        };
+        model.set("_debug_info", JSON.stringify(info));
+        if (model.save_changes) model.save_changes();
+      } catch (err) {
+        try {
+          model.set("_debug_info", JSON.stringify({ error: String((err && err.message) || err) }));
+          if (model.save_changes) model.save_changes();
+        } catch {
+          /* ignore */
+        }
+      }
     }
 
     function updateLegend() {
@@ -1054,6 +1458,16 @@ export default {
       applyColouring();
     });
 
+    collSelect.addEventListener("change", () => {
+      state.activeCollection = collSelect.value;
+      applyCollectionVisibility();
+      // Drop the colour selection if it isn't part of the newly selected collection.
+      const active = state.collections.find((c) => c.name === state.activeCollection);
+      if (active && !active.attrNames.has(state.colorAttribute)) state.colorAttribute = "";
+      rebuildAttributeOptions();
+      applyColouring();
+    });
+
     // Register the bytes for one manifest into the global virtual-file registry.
     function loadData() {
       try {
@@ -1103,6 +1517,8 @@ export default {
       // Tiles are being reloaded: drop discovered attributes and node snapshots.
       state.loadedNodes = [];
       state.attributes = new Map();
+      state.collections = [];
+      state.activeCollection = null;
       state.diag = {
         attrs: new Set(),
         featureIds: new Set(),
@@ -1170,6 +1586,21 @@ export default {
         }
         const objGlbBytes = [];
 
+        // Map each glb (by virtual path and by basename) to its collection, and register
+        // the collection + its colourable attribute names for the selector UI.
+        const collectionByGlb = new Map();
+        for (const c of obj.collections || []) {
+          for (const p of c.glbs || []) {
+            collectionByGlb.set(p, c.name);
+            collectionByGlb.set(String(p).split("/").pop(), c.name);
+          }
+          let entry = state.collections.find((e) => e.name === c.name);
+          if (!entry) {
+            entry = { name: c.name, attrNames: new Set() };
+            state.collections.push(entry);
+          }
+          for (const an of c.attributes || []) entry.attrNames.add(an);
+        }
         for (const f of obj.files) {
           state.stats.fileCount += 1;
           const slice = bytes.subarray(f.offset, f.offset + f.length);
@@ -1186,7 +1617,7 @@ export default {
             typePath = f.path.replace(/\.gz$/i, "");
           }
 
-          if (/\.glb$/i.test(typePath)) objGlbBytes.push(slice);
+          if (/\.glb$/i.test(typePath)) objGlbBytes.push({ bytes: slice, path: f.path, typePath });
 
           if (f.path.endsWith("/tileset.json")) {
             try {
@@ -1235,13 +1666,29 @@ export default {
           for (const gbytes of objGlbBytes) {
             let decoded = null;
             try {
-              decoded = decodeGlbAttributes(gbytes, nameByHash);
+              decoded = decodeGlbAttributes(gbytes.bytes, nameByHash);
             } catch (err) {
               console.warn("[evo_viz] attribute decode failed", err);
             }
             if (!decoded || !decoded.attrs.length) continue;
-            attrSets.push({ pointCount: decoded.pointCount, attrs: decoded.attrs, used: false });
-            // Merge into the global attribute metadata used by the dropdown + legend.
+            // Tag each decoded set with the collection its glb belongs to so nodes are matched
+            // to their own attributes. Assay and lith templates share a vertex count (18), so
+            // matching on vertex count alone cross-wires them.
+            const base = String(gbytes.path).split("/").pop();
+            const typeBase = String(gbytes.typePath).split("/").pop();
+            const setCollection =
+              collectionByGlb.get(gbytes.path) ||
+              collectionByGlb.get(gbytes.typePath) ||
+              collectionByGlb.get(base) ||
+              collectionByGlb.get(typeBase) ||
+              null;
+            attrSets.push({
+              pointCount: decoded.pointCount,
+              instanceCount: decoded.instanceCount || 0,
+              collection: setCollection,
+              attrs: decoded.attrs,
+              used: false,
+            });            // Merge into the global attribute metadata used by the dropdown + legend.
             for (const at of decoded.attrs) {
               let meta = state.attributes.get(at.name);
               if (!meta) {
@@ -1281,11 +1728,30 @@ export default {
             refreshDebugPanel();
             return;
           }
+          // Work out which collection this tile's glb belongs to so its geometry can be
+          // shown/hidden and coloured independently of the other collections.
+          let collName = null;
+          const contentUri = e && e.tile && e.tile.content && e.tile.content.uri;
+          if (contentUri && collectionByGlb.size) {
+            let key = contentUri;
+            try {
+              key = new URL(contentUri, obj.root).pathname.replace(/^\//, "");
+            } catch {
+              // Fall back to the raw uri / basename below.
+            }
+            collName =
+              collectionByGlb.get(key) ||
+              collectionByGlb.get(key.split("/").pop()) ||
+              collectionByGlb.get(String(contentUri).split("/").pop()) ||
+              null;
+          }
           modelScene.traverse((node) => {
             if (!node) return;
-            // Track any renderable geometry so we can recolour it by attribute.
-            if ((node.isPoints || node.isMesh) && node.geometry) {
-              registerNode(node, attrSets);
+            // Track any renderable geometry so we can recolour it by attribute. Downhole
+            // collections load as LineSegments (node.isLine), so include lines alongside
+            // points and meshes or their attribute colours never get applied.
+            if ((node.isPoints || node.isMesh || node.isLine) && node.geometry) {
+              registerNode(node, attrSets, collName);
             }
             if (!node.isPoints || !node.material) return;
             state.stats.pointNodes += 1;
@@ -1300,6 +1766,7 @@ export default {
             }
           });
           // Surface any newly discovered attributes and (re)apply the active colouring.
+          applyCollectionVisibility();
           rebuildAttributeOptions();
           applyColouring();
 
@@ -1372,6 +1839,12 @@ export default {
         if (tiles.group) world.add(tiles.group);
         state.tiles.push(tiles);
       }
+
+      // Now that every object's collections are known, build the selector and default to a
+      // collection with colourable attributes (this also hides the other collections up
+      // front, so overlapping interval tables don't render on top of each other).
+      buildCollectionUI();
+      rebuildAttributeOptions();
 
       refreshDebugPanel();
     }
