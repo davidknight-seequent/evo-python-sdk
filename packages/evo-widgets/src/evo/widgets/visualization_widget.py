@@ -32,6 +32,7 @@ class EvoObjectViewer(anywidget.AnyWidget):
     debug_max_lines = traitlets.Int(12).tag(sync=True)
     color_attribute = traitlets.Unicode("").tag(sync=True)
     colormap = traitlets.Unicode("viridis").tag(sync=True)
+    flat_color = traitlets.Unicode("").tag(sync=True)
     _debug_info = traitlets.Unicode("").tag(sync=True)
 
     def __init__(self, **kwargs: Any) -> None:

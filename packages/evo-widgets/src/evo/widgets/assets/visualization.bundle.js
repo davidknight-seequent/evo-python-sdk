@@ -38082,6 +38082,7 @@ var visualization_default = {
       attributes: /* @__PURE__ */ new Map(),
       colorAttribute: model.get("color_attribute") || "",
       colormap: model.get("colormap") || "viridis",
+      flatColor: model.get("flat_color") || "",
       // Selectable interval-table collections; collars are handled separately.
       collections: [],
       activeCollection: null,
@@ -38385,6 +38386,15 @@ var visualization_default = {
               pos.needsUpdate = true;
             }
           }
+        } else if (state.flatColor) {
+          if (node.isInstancedMesh) node.instanceColor = null;
+          if (geometry.attributes.color) geometry.deleteAttribute("color");
+          entry.materials.forEach((m) => {
+            if (!m) return;
+            m.vertexColors = false;
+            if (m.color) m.color.set(state.flatColor);
+            m.needsUpdate = true;
+          });
         } else {
           if (node.isInstancedMesh) {
             if (entry.originalInstanceMatrix && node.instanceMatrix) {
@@ -39054,12 +39064,17 @@ var visualization_default = {
       if (state.attributes.has(v) || v === "") attrSelect.value = v;
       applyColouring();
     };
+    const onFlatColor = () => {
+      state.flatColor = model.get("flat_color") || "";
+      applyColouring();
+    };
     model.on("change:_blob", onData);
     model.on("change:_manifest", onData);
     model.on("change:background_color", onBg);
     model.on("change:debug", onDebug);
     model.on("change:debug_max_lines", onDebug);
     model.on("change:color_attribute", onColorAttr);
+    model.on("change:flat_color", onFlatColor);
     loadData();
     setTimeout(loadData, 0);
     setTimeout(loadData, 100);
@@ -39074,6 +39089,7 @@ var visualization_default = {
       model.off("change:debug", onDebug);
       model.off("change:debug_max_lines", onDebug);
       model.off("change:color_attribute", onColorAttr);
+      model.off("change:flat_color", onFlatColor);
       if (g.__evoVizActiveStats === state.stats) {
         g.__evoVizActiveStats = null;
       }

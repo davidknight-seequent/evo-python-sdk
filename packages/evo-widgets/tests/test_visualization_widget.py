@@ -14,6 +14,16 @@ class TestEvoObjectViewer(unittest.TestCase):
 
         self.assertEqual(viewer.background_color, "#f5f5f5")
 
+    def test_flat_color_can_be_configured(self) -> None:
+        viewer = EvoObjectViewer(flat_color="#ff5500")
+
+        self.assertEqual(viewer.flat_color, "#ff5500")
+
+    def test_flat_color_defaults_to_source_material_colors(self) -> None:
+        viewer = EvoObjectViewer()
+
+        self.assertEqual(viewer.flat_color, "")
+
     def test_add_bundle_packs_manifest_and_blob(self) -> None:
         viewer = EvoObjectViewer()
         bundle = TilesetBundle(

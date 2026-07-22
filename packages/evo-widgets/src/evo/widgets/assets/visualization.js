@@ -921,6 +921,7 @@ export default {
       attributes: new Map(),
       colorAttribute: model.get("color_attribute") || "",
       colormap: model.get("colormap") || "viridis",
+      flatColor: model.get("flat_color") || "",
       // Selectable interval-table collections; collars are handled separately.
       collections: [],
       activeCollection: null,
@@ -1290,6 +1291,15 @@ export default {
               pos.needsUpdate = true;
             }
           }
+        } else if (state.flatColor) {
+          if (node.isInstancedMesh) node.instanceColor = null;
+          if (geometry.attributes.color) geometry.deleteAttribute("color");
+          entry.materials.forEach((m) => {
+            if (!m) return;
+            m.vertexColors = false;
+            if (m.color) m.color.set(state.flatColor);
+            m.needsUpdate = true;
+          });
         } else {
           // Restore the node's original styling.
           if (node.isInstancedMesh) {
@@ -2057,12 +2067,17 @@ export default {
       if (state.attributes.has(v) || v === "") attrSelect.value = v;
       applyColouring();
     };
+    const onFlatColor = () => {
+      state.flatColor = model.get("flat_color") || "";
+      applyColouring();
+    };
     model.on("change:_blob", onData);
     model.on("change:_manifest", onData);
     model.on("change:background_color", onBg);
     model.on("change:debug", onDebug);
     model.on("change:debug_max_lines", onDebug);
     model.on("change:color_attribute", onColorAttr);
+    model.on("change:flat_color", onFlatColor);
 
     // Initial render + a delayed retry to avoid missing early model state hydration.
     loadData();
@@ -2081,6 +2096,7 @@ export default {
       model.off("change:debug", onDebug);
       model.off("change:debug_max_lines", onDebug);
       model.off("change:color_attribute", onColorAttr);
+      model.off("change:flat_color", onFlatColor);
       if (g.__evoVizActiveStats === state.stats) {
         g.__evoVizActiveStats = null;
       }
