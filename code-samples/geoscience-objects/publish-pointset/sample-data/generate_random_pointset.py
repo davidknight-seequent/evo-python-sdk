@@ -46,6 +46,24 @@ def lithology(pocket_strength: float, random_source: random.Random) -> str:
     return random_source.choice(["Andesite", "Basalt", "Granodiorite", "Rhyolite"])
 
 
+def domain(pocket_strength: float) -> str:
+    """Assign a simple mineralisation domain label."""
+    if pocket_strength > 0.5:
+        return "Ore Core"
+    if pocket_strength > 0.2:
+        return "Ore Halo"
+    return "Host Rock"
+
+
+def weathering(z: float) -> str:
+    """Assign a weathering class using elevation as a proxy for depth."""
+    if z >= 3_050:
+        return "Oxide"
+    if z >= 2_980:
+        return "Transition"
+    return "Fresh"
+
+
 def random_location(random_source: random.Random) -> tuple[float, float, float]:
     """Sample dense clusters plus a small diffuse population between them."""
     if random_source.random() < 0.9:
@@ -73,7 +91,17 @@ def main() -> None:
 
     with OUTPUT_PATH.open("w", newline="") as output_file:
         writer = csv.writer(output_file, lineterminator="\n")
-        writer.writerow(["X", "Y", "Z", "Lithology", "CU_pct", "AU_gpt", "DENSITY"])
+        writer.writerow([
+            "X",
+            "Y",
+            "Z",
+            "Lithology",
+            "Domain",
+            "Weathering",
+            "CU_pct",
+            "AU_gpt",
+            "DENSITY",
+        ])
 
         for _ in range(POINT_COUNT):
             x, y, z = random_location(random_source)
@@ -87,6 +115,8 @@ def main() -> None:
                     round(y, 6),
                     round(z, 6),
                     lithology(pocket_strength, random_source),
+                    domain(pocket_strength),
+                    weathering(z),
                     "" if is_cu_missing else cu_pct,
                     round(0.02 + 25 * pocket_strength**1.25 + random_source.lognormvariate(-1.8, 1), 2),
                     "" if is_density_missing else round(2.4 + 0.8 * pocket_strength + random_source.gauss(0, 0.12), 2),
