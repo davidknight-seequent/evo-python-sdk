@@ -37989,7 +37989,13 @@ var visualization_default = {
     container.style.height = `${height}px`;
     el.appendChild(container);
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(model.get("background_color") || "#1e1e1e");
+    const updateBackground = () => {
+      const color = new THREE.Color(model.get("background_color") || "#1e1e1e");
+      scene.background = color;
+      const luminance = 0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b;
+      container.classList.toggle("evo-viz-light-background", luminance > 0.5);
+    };
+    updateBackground();
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(window.devicePixelRatio);
     container.appendChild(renderer.domElement);
@@ -38002,6 +38008,22 @@ var visualization_default = {
     const colorPanel = document.createElement("div");
     colorPanel.className = "evo-viz-colors";
     colorPanel.style.display = "none";
+    const collarRow = document.createElement("label");
+    collarRow.className = "evo-viz-toggle-row";
+    collarRow.style.display = "none";
+    const collarToggle = document.createElement("input");
+    collarToggle.type = "checkbox";
+    collarToggle.checked = true;
+    collarRow.appendChild(collarToggle);
+    collarRow.append("Collar");
+    const collectionsRow = document.createElement("label");
+    collectionsRow.className = "evo-viz-toggle-row";
+    collectionsRow.style.display = "none";
+    const collectionsToggle = document.createElement("input");
+    collectionsToggle.type = "checkbox";
+    collectionsToggle.checked = true;
+    collectionsRow.appendChild(collectionsToggle);
+    collectionsRow.append("Collections");
     const collRow = document.createElement("label");
     collRow.className = "evo-viz-colors-row";
     collRow.style.display = "none";
@@ -38031,6 +38053,8 @@ var visualization_default = {
     legend.appendChild(legendBar);
     legend.appendChild(legendScale);
     legend.appendChild(legendCategories);
+    colorPanel.appendChild(collarRow);
+    colorPanel.appendChild(collectionsRow);
     colorPanel.appendChild(collRow);
     colorPanel.appendChild(attrRow);
     colorPanel.appendChild(legend);
@@ -38058,9 +38082,11 @@ var visualization_default = {
       attributes: /* @__PURE__ */ new Map(),
       colorAttribute: model.get("color_attribute") || "",
       colormap: model.get("colormap") || "viridis",
-      // Selectable collections (downhole objects expose collars + one glb per interval table).
+      // Selectable interval-table collections; collars are handled separately.
       collections: [],
       activeCollection: null,
+      showCollar: true,
+      showCollections: true,
       // Tile content diagnostics (deduped across streaming tiles).
       diag: {
         attrs: /* @__PURE__ */ new Set(),
@@ -38131,7 +38157,7 @@ var visualization_default = {
       debugPanel.textContent = lines.slice(0, maxLines).join("\n");
     }
     function syncControlsPanel() {
-      const anyVisible = collRow.style.display !== "none" || attrRow.style.display !== "none";
+      const anyVisible = collarRow.style.display !== "none" || collectionsRow.style.display !== "none" || collRow.style.display !== "none" || attrRow.style.display !== "none";
       colorPanel.style.display = anyVisible ? "block" : "none";
     }
     function rebuildAttributeOptions() {
@@ -38179,7 +38205,8 @@ var visualization_default = {
           for (const at of set.attrs) attrValues.set(at.name, at);
         }
       }
-      if (collection && state.activeCollection) node.visible = collection === state.activeCollection;
+      if (collection) node.visible = state.showCollections && (!state.activeCollection || collection === state.activeCollection);
+      if (!collection) node.visible = state.showCollar;
       const instanced = !!node.isInstancedMesh;
       state.loadedNodes.push({
         node,
@@ -38198,11 +38225,23 @@ var visualization_default = {
     }
     function applyCollectionVisibility() {
       for (const entry of state.loadedNodes) {
-        entry.node.visible = !state.activeCollection || entry.collection === state.activeCollection;
+        entry.node.visible = entry.collection ? state.showCollections && (!state.activeCollection || entry.collection === state.activeCollection) : state.showCollar;
       }
+    }
+    function refreshCollarUI() {
+      collarRow.style.display = state.collections.length > 0 ? "flex" : "none";
+      collarToggle.checked = state.showCollar;
+      syncControlsPanel();
+    }
+    function refreshCollectionsUI() {
+      collectionsRow.style.display = state.collections.length > 0 ? "flex" : "none";
+      collectionsToggle.checked = state.showCollections;
+      syncControlsPanel();
     }
     function buildCollectionUI() {
       collSelect.innerHTML = "";
+      refreshCollarUI();
+      refreshCollectionsUI();
       if (state.collections.length < 2) {
         collRow.style.display = "none";
         state.activeCollection = null;
@@ -38563,6 +38602,14 @@ var visualization_default = {
       rebuildAttributeOptions();
       applyColouring();
     });
+    collarToggle.addEventListener("change", () => {
+      state.showCollar = collarToggle.checked;
+      applyCollectionVisibility();
+    });
+    collectionsToggle.addEventListener("change", () => {
+      state.showCollections = collectionsToggle.checked;
+      applyCollectionVisibility();
+    });
     function loadData() {
       try {
         loadDataInner();
@@ -38607,6 +38654,10 @@ var visualization_default = {
       state.attributes = /* @__PURE__ */ new Map();
       state.collections = [];
       state.activeCollection = null;
+      state.showCollar = true;
+      state.showCollections = true;
+      collarRow.style.display = "none";
+      collectionsRow.style.display = "none";
       state.diag = {
         attrs: /* @__PURE__ */ new Set(),
         featureIds: /* @__PURE__ */ new Set(),
@@ -38673,9 +38724,10 @@ var visualization_default = {
         const collectionByGlb = /* @__PURE__ */ new Map();
         for (const c of obj.collections || []) {
           for (const p of c.glbs || []) {
-            collectionByGlb.set(p, c.name);
-            collectionByGlb.set(String(p).split("/").pop(), c.name);
+            collectionByGlb.set(p, c.is_collar ? null : c.name);
+            collectionByGlb.set(String(p).split("/").pop(), c.is_collar ? null : c.name);
           }
+          if (c.is_collar) continue;
           let entry = state.collections.find((e) => e.name === c.name);
           if (!entry) {
             entry = { name: c.name, attrNames: /* @__PURE__ */ new Set() };
@@ -38817,6 +38869,7 @@ var visualization_default = {
             }
           });
           applyCollectionVisibility();
+          refreshCollarUI();
           rebuildAttributeOptions();
           applyColouring();
           try {
@@ -38991,7 +39044,7 @@ var visualization_default = {
     }
     const onData = () => loadData();
     const onBg = () => {
-      scene.background = new THREE.Color(model.get("background_color") || "#1e1e1e");
+      updateBackground();
       applyColouring();
     };
     const onDebug = () => refreshDebugPanel();

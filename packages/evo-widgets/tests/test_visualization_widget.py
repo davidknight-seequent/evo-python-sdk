@@ -9,6 +9,11 @@ from evo.widgets import EvoObjectViewer, TilesetBundle
 class TestEvoObjectViewer(unittest.TestCase):
     """Tests for packing Python-side tileset bundles for the browser renderer."""
 
+    def test_background_color_can_be_configured(self) -> None:
+        viewer = EvoObjectViewer(background_color="#f5f5f5")
+
+        self.assertEqual(viewer.background_color, "#f5f5f5")
+
     def test_add_bundle_packs_manifest_and_blob(self) -> None:
         viewer = EvoObjectViewer()
         bundle = TilesetBundle(

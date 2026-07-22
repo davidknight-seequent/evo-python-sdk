@@ -300,13 +300,13 @@ def _collect_collections(object_json: dict[str, Any]) -> list[dict[str, Any]]:
     if isinstance(location, dict):
         hashes: set[str] = set()
         _collect_data_hashes(location, hashes)
-        defs.append({"name": "Collars", "hashes": hashes})
+        defs.append({"name": "Collars", "hashes": hashes, "is_collar": True})
     for index, collection in enumerate(object_json.get("collections") or []):
         if not isinstance(collection, dict):
             continue
         hashes = set()
         _collect_data_hashes(collection, hashes)
-        defs.append({"name": collection.get("name") or f"Collection {index + 1}", "hashes": hashes})
+        defs.append({"name": collection.get("name") or f"Collection {index + 1}", "hashes": hashes, "is_collar": False})
     return defs
 
 
@@ -342,6 +342,7 @@ def _assign_glbs_to_collections(bundle: TilesetBundle, collection_defs: list[dic
                 "name": collection["name"],
                 "glbs": entry["glbs"],
                 "attributes": [name_by_hash[h] for h in entry["hashes"] if h in name_by_hash],
+                "is_collar": bool(collection.get("is_collar")),
             }
         )
     return collections

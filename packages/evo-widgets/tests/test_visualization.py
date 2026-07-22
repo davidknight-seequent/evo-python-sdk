@@ -137,6 +137,8 @@ class TestCollections(unittest.TestCase):
         }
         defs = _collect_collections(object_json)
         self.assertEqual([d["name"] for d in defs], ["Collars", "assay", "lith"])
+        self.assertTrue(defs[0]["is_collar"])
+        self.assertFalse(defs[1]["is_collar"])
         self.assertEqual(defs[0]["hashes"], {"collar-hash"})
         self.assertEqual(defs[1]["hashes"], {"aaa"})
         self.assertEqual(defs[2]["hashes"], {"bbb"})
@@ -158,7 +160,7 @@ class TestCollections(unittest.TestCase):
             "id/tileset.json": b"{}",
         }
         collection_defs = [
-            {"name": "Collars", "hashes": set()},
+            {"name": "Collars", "hashes": set(), "is_collar": True},
             {"name": "assay", "hashes": {"aaa"}},
             {"name": "lith", "hashes": {"bbb"}},
             {"name": "depths", "hashes": {"ccc"}},
@@ -168,6 +170,7 @@ class TestCollections(unittest.TestCase):
         by_name = {c["name"]: c for c in result}
         self.assertEqual(by_name["Collars"]["glbs"], ["id/tile_0.glb"])
         self.assertEqual(by_name["Collars"]["attributes"], [])
+        self.assertTrue(by_name["Collars"]["is_collar"])
         self.assertEqual(by_name["assay"]["glbs"], ["id/tile_1.glb"])
         self.assertEqual(by_name["assay"]["attributes"], ["CU"])
         self.assertEqual(by_name["lith"]["glbs"], ["id/tile_2.glb"])

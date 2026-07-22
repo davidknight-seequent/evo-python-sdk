@@ -805,7 +805,13 @@ export default {
     el.appendChild(container);
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(model.get("background_color") || "#1e1e1e");
+    const updateBackground = () => {
+      const color = new THREE.Color(model.get("background_color") || "#1e1e1e");
+      scene.background = color;
+      const luminance = 0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b;
+      container.classList.toggle("evo-viz-light-background", luminance > 0.5);
+    };
+    updateBackground();
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(window.devicePixelRatio);
@@ -819,10 +825,29 @@ export default {
     debugPanel.className = "evo-viz-debug";
     container.appendChild(debugPanel);
 
-    // --- Left-side controls panel: collection selector above the attribute selector -----
+    // --- Left-side controls panel: visibility toggles, collection selector, and attribute selector -----
     const colorPanel = document.createElement("div");
     colorPanel.className = "evo-viz-colors";
     colorPanel.style.display = "none";
+
+    // Downhole collars are not collections, so they have their own visibility control.
+    const collarRow = document.createElement("label");
+    collarRow.className = "evo-viz-toggle-row";
+    collarRow.style.display = "none";
+    const collarToggle = document.createElement("input");
+    collarToggle.type = "checkbox";
+    collarToggle.checked = true;
+    collarRow.appendChild(collarToggle);
+    collarRow.append("Collar");
+
+    const collectionsRow = document.createElement("label");
+    collectionsRow.className = "evo-viz-toggle-row";
+    collectionsRow.style.display = "none";
+    const collectionsToggle = document.createElement("input");
+    collectionsToggle.type = "checkbox";
+    collectionsToggle.checked = true;
+    collectionsRow.appendChild(collectionsToggle);
+    collectionsRow.append("Collections");
 
     // Collection selector (hidden until a multi-collection object is loaded).
     const collRow = document.createElement("label");
@@ -857,6 +882,8 @@ export default {
     legend.appendChild(legendScale);
     legend.appendChild(legendCategories);
 
+    colorPanel.appendChild(collarRow);
+    colorPanel.appendChild(collectionsRow);
     colorPanel.appendChild(collRow);
     colorPanel.appendChild(attrRow);
     colorPanel.appendChild(legend);
@@ -894,9 +921,11 @@ export default {
       attributes: new Map(),
       colorAttribute: model.get("color_attribute") || "",
       colormap: model.get("colormap") || "viridis",
-      // Selectable collections (downhole objects expose collars + one glb per interval table).
+      // Selectable interval-table collections; collars are handled separately.
       collections: [],
       activeCollection: null,
+      showCollar: true,
+      showCollections: true,
       // Tile content diagnostics (deduped across streaming tiles).
       diag: {
         attrs: new Set(),
@@ -975,9 +1004,13 @@ export default {
 
     // --- Attribute-driven colouring ------------------------------------------------
 
-    // Show the shared left-side controls panel whenever either selector row is visible.
+    // Show the shared left-side controls panel whenever a viewer control is visible.
     function syncControlsPanel() {
-      const anyVisible = collRow.style.display !== "none" || attrRow.style.display !== "none";
+      const anyVisible =
+        collarRow.style.display !== "none" ||
+        collectionsRow.style.display !== "none" ||
+        collRow.style.display !== "none" ||
+        attrRow.style.display !== "none";
       colorPanel.style.display = anyVisible ? "block" : "none";
     }
 
@@ -1041,7 +1074,8 @@ export default {
         }
       }
 
-      if (collection && state.activeCollection) node.visible = collection === state.activeCollection;
+      if (collection) node.visible = state.showCollections && (!state.activeCollection || collection === state.activeCollection);
+      if (!collection) node.visible = state.showCollar;
 
       const instanced = !!node.isInstancedMesh;
       state.loadedNodes.push({
@@ -1060,11 +1094,25 @@ export default {
       });
     }
 
-    // Show only the geometry belonging to the active collection (all geometry when none set).
+    // Show the active collection and, independently, the downhole collar geometry.
     function applyCollectionVisibility() {
       for (const entry of state.loadedNodes) {
-        entry.node.visible = !state.activeCollection || entry.collection === state.activeCollection;
+        entry.node.visible = entry.collection
+          ? state.showCollections && (!state.activeCollection || entry.collection === state.activeCollection)
+          : state.showCollar;
       }
+    }
+
+    function refreshCollarUI() {
+      collarRow.style.display = state.collections.length > 0 ? "flex" : "none";
+      collarToggle.checked = state.showCollar;
+      syncControlsPanel();
+    }
+
+    function refreshCollectionsUI() {
+      collectionsRow.style.display = state.collections.length > 0 ? "flex" : "none";
+      collectionsToggle.checked = state.showCollections;
+      syncControlsPanel();
     }
 
     // Populate the collection dropdown and pick a sensible default (the first collection
@@ -1072,6 +1120,8 @@ export default {
     // bare collar points).
     function buildCollectionUI() {
       collSelect.innerHTML = "";
+      refreshCollarUI();
+      refreshCollectionsUI();
       if (state.collections.length < 2) {
         collRow.style.display = "none";
         state.activeCollection = null;
@@ -1468,6 +1518,16 @@ export default {
       applyColouring();
     });
 
+    collarToggle.addEventListener("change", () => {
+      state.showCollar = collarToggle.checked;
+      applyCollectionVisibility();
+    });
+
+    collectionsToggle.addEventListener("change", () => {
+      state.showCollections = collectionsToggle.checked;
+      applyCollectionVisibility();
+    });
+
     // Register the bytes for one manifest into the global virtual-file registry.
     function loadData() {
       try {
@@ -1519,6 +1579,10 @@ export default {
       state.attributes = new Map();
       state.collections = [];
       state.activeCollection = null;
+      state.showCollar = true;
+      state.showCollections = true;
+      collarRow.style.display = "none";
+      collectionsRow.style.display = "none";
       state.diag = {
         attrs: new Set(),
         featureIds: new Set(),
@@ -1591,9 +1655,10 @@ export default {
         const collectionByGlb = new Map();
         for (const c of obj.collections || []) {
           for (const p of c.glbs || []) {
-            collectionByGlb.set(p, c.name);
-            collectionByGlb.set(String(p).split("/").pop(), c.name);
+            collectionByGlb.set(p, c.is_collar ? null : c.name);
+            collectionByGlb.set(String(p).split("/").pop(), c.is_collar ? null : c.name);
           }
+          if (c.is_collar) continue;
           let entry = state.collections.find((e) => e.name === c.name);
           if (!entry) {
             entry = { name: c.name, attrNames: new Set() };
@@ -1767,6 +1832,7 @@ export default {
           });
           // Surface any newly discovered attributes and (re)apply the active colouring.
           applyCollectionVisibility();
+          refreshCollarUI();
           rebuildAttributeOptions();
           applyColouring();
 
@@ -1980,7 +2046,7 @@ export default {
     // React to updated data / configuration from Python.
     const onData = () => loadData();
     const onBg = () => {
-      scene.background = new THREE.Color(model.get("background_color") || "#1e1e1e");
+      updateBackground();
       // No-data points are painted with the background colour; refresh them to match.
       applyColouring();
     };
