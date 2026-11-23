@@ -1,6 +1,6 @@
 # Evo Code Samples
 
-Welcome to the Evo Python SDK code samples! This directory contains comprehensive Jupyter notebook examples that demonstrate how to use the various Evo APIs for geoscience data management and analysis.
+Welcome to the Evo Python SDK code samples! This directory contains Jupyter notebook and command-line examples that demonstrate how to use the various Evo APIs for geoscience data management and analysis.
 
 ## 📋 Prerequisites
 
@@ -223,6 +223,7 @@ Publish and download various geoscience data types:
 - Point sets and triangular meshes
 - 2D regular grids
 - Complex geoscience data structures
+- [Copy objects and block models between environments](geoscience-objects/copy-workspace/) with a retained local archive
 
 *Note: Some notebooks have platform-specific requirements (e.g., Windows-only dependencies)*
 
